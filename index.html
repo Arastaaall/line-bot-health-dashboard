@@ -4,53 +4,79 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Nutrition Dashboard</title>
-    <!-- LIFF SDK の読み込み -->
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- LIFF SDK -->
     <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
-    <style>
-        body { background-color: #121212; color: #00FFCC; font-family: sans-serif; padding: 20px; }
-        h1 { font-size: 1.2rem; }
-        .card { background: #1E1E1E; padding: 15px; border-radius: 8px; margin-top: 15px; }
-    </style>
 </head>
-<body>
-    <h1>カロリー管理ダッシュボード</h1>
-    <div class="card">
-        <p>ユーザーID: <br><strong id="userId" style="color: #FF00FF;">取得中...</strong></p>
+<body class="bg-gray-100 font-sans text-gray-800">
+
+    <div class="flex h-screen overflow-hidden">
+        <!-- 左側サイドバー -->
+        <aside class="w-64 bg-white border-r border-gray-200 hidden md:flex flex-col">
+            <div class="p-6 border-b border-gray-100">
+                <h1 class="text-xs font-bold tracking-wider text-emerald-600">NUTRITION</h1>
+                <h2 class="text-lg font-extrabold text-gray-900">DASHBOARD</h2>
+            </div>
+            <nav class="flex-1 p-4 space-y-1 text-sm font-medium">
+                <a href="#" class="flex items-center px-4 py-3 text-emerald-600 bg-emerald-50 rounded-lg">📊 ダッシュボード</a>
+                <a href="#" class="flex items-center px-4 py-3 text-gray-600 hover:bg-gray-50 rounded-lg">🥗 食事記録</a>
+                <a href="#" class="flex items-center px-4 py-3 text-gray-600 hover:bg-gray-50 rounded-lg">📈 栄養グラフ</a>
+                <a href="#" class="flex items-center px-4 py-3 text-gray-600 hover:bg-gray-50 rounded-lg">⚙️ 設定</a>
+            </nav>
+        </aside>
+
+        <!-- メインコンテンツエリア -->
+        <main class="flex-1 flex flex-col overflow-y-auto">
+            <!-- トップバー -->
+            <header class="bg-white border-b border-gray-200 h-16 flex items-center justify-between px-6">
+                <h2 class="text-xl font-bold text-gray-800">栄養バランスグラフ</h2>
+                <div class="flex items-center space-x-3">
+                    <span class="text-sm font-medium bg-amber-100 text-amber-800 px-3 py-1 rounded-full text-xs">PRO MEMBER</span>
+                    <span id="userName" class="text-sm font-semibold">読み込み中...</span>
+                </div>
+            </header>
+
+            <!-- ダッシュボードの中身 -->
+            <div class="p-6 space-y-6">
+                <!-- ユーザーID確認用カード -->
+                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
+                    <p class="text-xs text-gray-400">接続ステータス</p>
+                    <p class="text-sm font-mono text-gray-600 mt-1">User ID: <span id="userId" class="text-emerald-600 font-bold">取得中...</span></p>
+                </div>
+
+                <!-- グラフの仮置きカード（今後ここにChart.jsを入れます） -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 h-64 flex items-center justify-center text-gray-400">
+                        [PFCバランス 棒グラフエリア]
+                    </div>
+                    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 h-64 flex items-center justify-center text-gray-400">
+                        [栄養バランス レーダーチャートエリア]
+                    </div>
+                </div>
+            </div>
+        </main>
     </div>
 
     <script>
-        // 先ほど作成したご自身のLIFF IDをここに直接貼り付けます
         const MY_LIFF_ID = "2011063084-sSBZXflI";
-        const GAS_URL = "https://script.google.com/macros/s/AKfycbxEl3VIa628NdVq3psrRXQXZhDcIS7MfofpM4IvHa3gEUBx2Y3_Uu4lqpnPS7DRTNtC/exec";
 
-        async function main() {
+        async function initLiff() {
             try {
                 await liff.init({ liffId: MY_LIFF_ID });
-                
                 if (!liff.isLoggedIn()) {
                     liff.login();
                     return;
                 }
-
                 const profile = await liff.getProfile();
                 document.getElementById('userId').textContent = profile.userId;
-
-            // GASからデータを取得
-                const response = await fetch(`${GAS_URL}?userId=${profile.userId}`);
-                const data = await response.json();
-
-            // 画面に表示する処理
-                const displayArea = document.getElementById('userId'); // ここを適宜ID名変更
-                displayArea.innerHTML = `
-                    ID: ${profile.userId}<br>
-                    今日の摂取カロリー: <strong>${data.length > 0 ? data[0][2] : 'データなし'} kcal</strong>
-                `;
+                document.getElementById('userName').textContent = profile.displayName + " さん";
             } catch (err) {
                 document.getElementById('userId').textContent = "エラー: " + err;
             }
         }
 
-        main();
+        initLiff();
     </script>
 </body>
 </html>
