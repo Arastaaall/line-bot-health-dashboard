@@ -21,6 +21,7 @@
     <script>
         // 先ほど作成したご自身のLIFF IDをここに直接貼り付けます
         const MY_LIFF_ID = "2011063084-sSBZXflI";
+        const GAS_URL = "https://script.google.com/macros/s/AKfycbxEl3VIa628NdVq3psrRXQXZhDcIS7MfofpM4IvHa3gEUBx2Y3_Uu4lqpnPS7DRTNtC/exec";
 
         async function main() {
             try {
@@ -34,9 +35,16 @@
                 const profile = await liff.getProfile();
                 document.getElementById('userId').textContent = profile.userId;
 
-                // ここでGAS（API）へユーザーIDを送信してデータを取得する処理を追加できます
-                // fetch('あなたのGASのWebアプリURL?userId=' + profile.userId) ...
+            // GASからデータを取得
+                const response = await fetch(`${GAS_URL}?userId=${profile.userId}`);
+                const data = await response.json();
 
+            // 画面に表示する処理
+                const displayArea = document.getElementById('userId'); // ここを適宜ID名変更
+                displayArea.innerHTML = `
+                    ID: ${profile.userId}<br>
+                    今日の摂取カロリー: <strong>${data.length > 0 ? data[0][2] : 'データなし'} kcal</strong>
+                `;
             } catch (err) {
                 document.getElementById('userId').textContent = "エラー: " + err;
             }
