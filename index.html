@@ -6,7 +6,7 @@
     <title>Nutrition Dashboard</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Chart.js CDN (グラフライブラリ) -->
+    <!-- Chart.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <!-- LIFF SDK -->
     <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
@@ -35,23 +35,31 @@
                 <h2 class="text-xl font-bold text-gray-800">栄養バランスグラフ</h2>
                 <div class="flex items-center space-x-3">
                     <span class="text-sm font-medium bg-amber-100 text-amber-800 px-3 py-1 rounded-full text-xs">PRO MEMBER</span>
-                    <span id="userName" class="text-sm font-semibold">ゲスト さん</span>
+                    <span id="userName" class="text-sm font-semibold">読み込み中...</span>
                 </div>
             </header>
 
             <!-- ダッシュボードの中身 -->
             <div class="p-6 space-y-6">
-                <!-- ユーザーID確認用カード -->
-                <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
-                    <p class="text-xs text-gray-400">接続ステータス</p>
-                    <p class="text-sm font-mono text-gray-600 mt-1">User ID: <span id="userId" class="text-emerald-600 font-bold">取得中...</span></p>
+                <!-- ステータス & サマリーカード -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
+                        <p class="text-xs text-gray-400">接続ステータス</p>
+                        <p class="text-sm font-mono text-gray-600 mt-1">User ID: <span id="userId" class="text-emerald-600 font-bold">取得中...</span></p>
+                    </div>
+                    <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
+                        <p class="text-xs text-gray-400">過去7日間の平均摂取カロリー</p>
+                        <p class="text-lg font-bold text-gray-800 mt-1">
+                            <span id="avgCal">--</span> kcal / <span id="targetCal" class="text-gray-500 text-sm">目標 -- kcal</span>
+                        </p>
+                    </div>
                 </div>
 
                 <!-- グラフエリア -->
                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <!-- PFCバランス（棒グラフ） -->
                     <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                        <h3 class="text-sm font-bold text-gray-700 mb-4">PFCバランス (過去7日間の平均)</h3>
+                        <h3 class="text-sm font-bold text-gray-700 mb-4">PFCバランス (過去7日間の平均: g)</h3>
                         <div class="relative h-64">
                             <canvas id="pfcChart"></canvas>
                         </div>
@@ -71,6 +79,11 @@
 
     <script>
         const MY_LIFF_ID = "2011063084-sSBZXflI";
+        // ★ご自身のGASのデプロイURLに書き換えてください
+        const GAS_URL = "https://script.google.com/macros/s/AKfycbxEl3VIa628NdVq3psrRXQXZhDcIS7MfofpM4IvHa3gEUBx2Y3_Uu4lqpnPS7DRTNtC/exec";
+
+        let pfcChartInstance = null;
+        let radarChartInstance = null;
 
         // --- LIFFの初期化 ---
         async function initLiff() {
@@ -79,26 +92,56 @@
                 if (liff.isLoggedIn()) {
                     const profile = await liff.getProfile();
                     document.getElementById('userId').textContent = profile.userId;
-                    document.getElementById('userName').textContent = profile.displayName + " さん";
+                    fetchDashboardData(profile.userId);
                 } else {
-                    document.getElementById('userId').textContent = "未ログイン（PC表示中）";
+                    document.getElementById('userId').textContent = "未ログイン（PCテスト表示）";
+                    // テスト用ダミーIDで実行する場合
+                    // fetchDashboardData("テスト用USER_ID");
+                    renderCharts({ avgProtein: 60, avgFat: 40, avgCarbs: 200 }, 2000, 1800);
                 }
             } catch (err) {
-                document.getElementById('userId').textContent = "PCブラウザ表示モード";
+                document.getElementById('userId').textContent = "PC表示モード";
+                renderCharts({ avgProtein: 60, avgFat: 40, avgCarbs: 200 }, 2000, 1800);
             }
         }
 
-        // --- グラフの描画（ダミーデータ） ---
-        function renderCharts() {
+        // --- GASからデータ取得 ---
+        async function fetchDashboardData(userId) {
+            try {
+                const response = await fetch(`${GAS_URL}?userId=${userId}`);
+                const data = await response.json();
+
+                if (data.error) {
+                    alert("データ取得エラー: " + data.error);
+                    return;
+                }
+
+                // 画面要素の更新
+                document.getElementById('userName').textContent = (data.user.name || "ユーザー") + " さん";
+                document.getElementById('avgCal').textContent = data.stats.avgCalories;
+                document.getElementById('targetCal').textContent = `目標 ${data.user.targetCalories} kcal`;
+
+                // グラフの描画更新
+                renderCharts(data.stats, data.user.targetCalories, data.stats.avgCalories);
+
+            } catch (err) {
+                console.error("Fetch Error:", err);
+            }
+        }
+
+        // --- グラフ描画関数 ---
+        function renderCharts(stats, targetCal, avgCal) {
             // 1. PFCバランス 棒グラフ
             const ctxPfc = document.getElementById('pfcChart').getContext('2d');
-            new Chart(ctxPfc, {
+            if (pfcChartInstance) pfcChartInstance.destroy();
+
+            pfcChartInstance = new Chart(ctxPfc, {
                 type: 'bar',
                 data: {
                     labels: ['P (たんぱく質)', 'F (脂質)', 'C (炭水化物)'],
                     datasets: [{
-                        label: '達成率 (%)',
-                        data: [112, 78, 94], // ダミーデータ（パーセント）
+                        label: '平均摂取量 (g)',
+                        data: [stats.avgProtein, stats.avgFat, stats.avgCarbs],
                         backgroundColor: ['#3B82F6', '#F97316', '#10B981'],
                         borderRadius: 6
                     }]
@@ -107,20 +150,27 @@
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: {
-                        y: { beginAtZero: true, max: 150 }
+                        y: { beginAtZero: true }
                     }
                 }
             });
 
             // 2. 栄養バランス レーダーチャート
             const ctxRadar = document.getElementById('radarChart').getContext('2d');
-            new Chart(ctxRadar, {
+            if (radarChartInstance) radarChartInstance.destroy();
+
+            radarChartInstance = new Chart(ctxRadar, {
                 type: 'radar',
                 data: {
-                    labels: ['たんぱく質', '脂質', '炭水化物', '食物繊維', 'ビタミンA', 'ビタミンC', 'カルシウム', '鉄'],
+                    labels: ['カロリー達成率', 'たんぱく質', '脂質', '炭水化物'],
                     datasets: [{
-                        label: '平均摂取量',
-                        data: [90, 75, 85, 60, 70, 80, 65, 75], // ダミーデータ
+                        label: '達成基準比 (%)',
+                        data: [
+                            Math.round((avgCal / targetCal) * 100) || 0,
+                            Math.min(Math.round((stats.avgProtein / 60) * 100), 120),
+                            Math.min(Math.round((stats.avgFat / 50) * 100), 120),
+                            Math.min(Math.round((stats.avgCarbs / 250) * 100), 120)
+                        ],
                         borderColor: '#10B981',
                         backgroundColor: 'rgba(16, 185, 129, 0.2)',
                         pointBackgroundColor: '#10B981'
@@ -130,15 +180,13 @@
                     responsive: true,
                     maintainAspectRatio: false,
                     scales: {
-                        r: { beginAtZero: true, max: 100 }
+                        r: { beginAtZero: true, max: 120 }
                     }
                 }
             });
         }
 
-        // 実行
         initLiff();
-        renderCharts();
     </script>
 </body>
 </html>
