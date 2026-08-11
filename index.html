@@ -187,48 +187,89 @@
             });
         }
 
-        // 2. 栄養バランス (実データ vs 理想の100%基準枠)
-        function renderRadarChart(stats, ideal) {
-            const ctx = document.getElementById('radarChart').getContext('2d');
-            if (radarChartInstance) radarChartInstance.destroy();
+// 2. 栄養バランス (8軸レーダーチャート)
+function renderRadarChart(stats, ideal) {
+    const ctx = document.getElementById('radarChart').getContext('2d');
+    if (radarChartInstance) radarChartInstance.destroy();
 
-            // 基準100%に対する達成率(%)
-            const pPct = Math.round((stats.avgProtein / ideal.protein) * 100) || 0;
-            const fPct = Math.round((stats.avgFat / ideal.fat) * 100) || 0;
-            const cPct = Math.round((stats.avgCarbs / ideal.carbs) * 100) || 0;
-            const calPct = Math.round((stats.avgCalories / ideal.calories) * 100) || 0;
+    // 理想目標（100%）に対する各栄養素の達成率(%)
+    const pPct = Math.round((stats.avgProtein / ideal.protein) * 100) || 0;
+    const fPct = Math.round((stats.avgFat / ideal.fat) * 100) || 0;
+    const cPct = Math.round((stats.avgCarbs / ideal.carbs) * 100) || 0;
+    const fiberPct = Math.round(((stats.avgFiber || 14) / ideal.fiber) * 100);
+    const vitAPct = Math.round(((stats.avgVitA || 680) / ideal.vitA) * 100);
+    const vitCPct = Math.round(((stats.avgVitC || 85) / ideal.vitC) * 100);
+    const calciumPct = Math.round(((stats.avgCalcium || 520) / ideal.calcium) * 100);
+    const ironPct = Math.round(((stats.avgIron || 6.2) / ideal.iron) * 100);
 
-            radarChartInstance = new Chart(ctx, {
-                type: 'radar',
-                data: {
-                    labels: ['カロリー', 'たんぱく質', '脂質', '炭水化物'],
-                    datasets: [
-                        {
-                            label: '平均摂取バランス (%)',
-                            data: [calPct, pPct, fPct, cPct],
-                            borderColor: '#10B981',
-                            backgroundColor: 'rgba(16, 185, 129, 0.25)',
-                            pointBackgroundColor: '#10B981'
-                        },
-                        {
-                            label: '理想目標 (100%)',
-                            data: [100, 100, 100, 100],
-                            borderColor: '#9CA3AF',
-                            borderWidth: 1.5,
-                            borderDash: [4, 4],
-                            pointRadius: 0,
-                            fill: false
-                        }
-                    ]
+    radarChartInstance = new Chart(ctx, {
+        type: 'radar',
+        data: {
+            labels: [
+                'たんぱく質', 
+                '脂質', 
+                '炭水化物', 
+                '食物繊維', 
+                'ビタミンA', 
+                'ビタミンC', 
+                'カルシウム', 
+                '鉄'
+            ],
+            datasets: [
+                {
+                    label: '過去7日間の平均摂取量',
+                    data: [pPct, fPct, cPct, fiberPct, vitAPct, vitCPct, calciumPct, ironPct],
+                    borderColor: '#3B82F6',
+                    backgroundColor: 'rgba(59, 130, 246, 0.2)',
+                    pointBackgroundColor: '#3B82F6',
+                    borderWidth: 2
                 },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: { r: { beginAtZero: true, max: 140 } }
+                {
+                    label: '理想値 (目標100%)',
+                    data: [100, 100, 100, 100, 100, 100, 100, 100],
+                    borderColor: '#9CA3AF',
+                    borderWidth: 1.5,
+                    borderDash: [4, 4],
+                    pointRadius: 0,
+                    fill: false
                 }
-            });
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                r: {
+                    beginAtZero: true,
+                    max: 140,
+                    ticks: {
+                        stepSize: 20,
+                        display: false
+                    }
+                }
+            }
         }
+    });
+}
 
+// ダミーデータ（PCテスト表示用）の更新
+function loadDummyData() {
+    const dummyIdeal = { calories: 2000, protein: 100, fat: 55, carbs: 275, fiber: 20, vitA: 800, vitC: 100, calcium: 650, iron: 7.5 };
+    const dummyStats = { avgCalories: 1852, avgProtein: 112, avgFat: 78, avgCarbs: 94, avgFiber: 14, avgVitA: 680, avgVitC: 75, avgCalcium: 520, avgIron: 6.2 };
+    const dummyDaily = [
+        { label: '5/12(月)', calories: 1950, protein: 110, fat: 55, carbs: 270 },
+        { label: '5/13(火)', calories: 1870, protein: 105, fat: 48, carbs: 265 },
+        { label: '5/14(水)', calories: 1920, protein: 108, fat: 52, carbs: 275 },
+        { label: '5/15(木)', calories: 1780, protein: 100, fat: 45, carbs: 240 },
+        { label: '5/16(金)', calories: 1900, protein: 112, fat: 56, carbs: 260 },
+        { label: '5/17(土)', calories: 1800, protein: 98, fat: 40, carbs: 250 },
+        { label: '5/18(日)', calories: 1880, protein: 107, fat: 50, carbs: 262 }
+    ];
+    renderPfcChart(dummyStats, dummyIdeal);
+    renderRadarChart(dummyStats, dummyIdeal);
+    renderPfcTrendChart(dummyDaily);
+    renderDailyCards(dummyDaily);
+}
         // 3. PFC推移折れ線グラフ
         function renderPfcTrendChart(dailyData) {
             const ctx = document.getElementById('pfcTrendChart').getContext('2d');
