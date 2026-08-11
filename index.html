@@ -1,68 +1,358 @@
-// 8軸レーダーチャート（PFC + 食物繊維 + ビタミン類 + 筋肥大必須ミネラル）
-function renderRadarChart(stats, ideal) {
-    const ctx = document.getElementById('radarChart').getContext('2d');
-    if (radarChartInstance) radarChartInstance.destroy();
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nutrition Dashboard</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- LIFF SDK -->
+    <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+</head>
+<body class="bg-gray-100 font-sans text-gray-800">
 
-    // 各項目の達成率(%)計算
-    const pPct = Math.round((stats.avgProtein / ideal.protein) * 100) || 0;
-    const fPct = Math.round((stats.avgFat / ideal.fat) * 100) || 0;
-    const cPct = Math.round((stats.avgCarbs / ideal.carbs) * 100) || 0;
-    const fiberPct = Math.round(((stats.avgFiber || 14) / ideal.fiber) * 100) || 0;
-    
-    // ビタミン類（統合スコア・達成率）
-    const vitPct = stats.avgVitamins || 80; 
-    
-    // 筋肥大特化ミネラル
-    const zincPct = Math.round(((stats.avgZinc || 8) / (ideal.zinc || 10)) * 100) || 0;
-    const magPct = Math.round(((stats.avgMagnesium || 260) / (ideal.magnesium || 320)) * 100) || 0;
-    const sodiumPct = Math.round(((stats.avgSodium || 7) / (ideal.sodium || 8)) * 100) || 0;
+    <div class="flex h-screen overflow-hidden">
+        <!-- 左側サイドバー -->
+        <aside class="w-64 bg-white border-r border-gray-200 hidden md:flex flex-col">
+            <div class="p-6 border-b border-gray-100">
+                <h1 class="text-xs font-bold tracking-wider text-emerald-600">NUTRITION</h1>
+                <h2 class="text-lg font-extrabold text-gray-900">DASHBOARD</h2>
+            </div>
+            <nav class="flex-1 p-4 space-y-1 text-sm font-medium">
+                <a href="#" class="flex items-center px-4 py-3 text-emerald-600 bg-emerald-50 rounded-lg">📊 ダッシュボード</a>
+                <a href="#" class="flex items-center px-4 py-3 text-gray-600 hover:bg-gray-50 rounded-lg">🥗 食事記録</a>
+                <a href="#" class="flex items-center px-4 py-3 text-gray-600 hover:bg-gray-50 rounded-lg">📈 栄養グラフ</a>
+                <a href="#" class="flex items-center px-4 py-3 text-gray-600 hover:bg-gray-50 rounded-lg">⚙️ 設定</a>
+            </nav>
+        </aside>
 
-    radarChartInstance = new Chart(ctx, {
-        type: 'radar',
-        data: {
-            labels: [
-                'たんぱく質', 
-                '脂質', 
-                '炭水化物', 
-                '食物繊維', 
-                'ビタミン類', 
-                '亜鉛', 
-                'マグネシウム', 
-                '塩分(ナトリウム)'
-            ],
-            datasets: [
-                {
-                    label: '過去7日間の平均摂取量',
-                    data: [pPct, fPct, cPct, fiberPct, vitPct, zincPct, magPct, sodiumPct],
-                    borderColor: '#3B82F6',
-                    backgroundColor: 'rgba(59, 130, 246, 0.2)',
-                    pointBackgroundColor: '#3B82F6',
-                    borderWidth: 2
-                },
-                {
-                    label: '理想値 (目標100%)',
-                    data: [100, 100, 100, 100, 100, 100, 100, 100],
-                    borderColor: '#9CA3AF',
-                    borderWidth: 1.5,
-                    borderDash: [4, 4],
-                    pointRadius: 0,
-                    fill: false
+        <!-- メインコンテンツエリア -->
+        <main class="flex-1 flex flex-col overflow-y-auto">
+            <!-- トップバー -->
+            <header class="bg-white border-b border-gray-200 h-16 flex items-center justify-between px-6">
+                <h2 class="text-xl font-bold text-gray-800">栄養バランスグラフ</h2>
+                <div class="flex items-center space-x-3">
+                    <span id="planBadge" class="text-xs font-medium bg-amber-100 text-amber-800 px-3 py-1 rounded-full">PRO MEMBER</span>
+                    <span id="userName" class="text-sm font-semibold">読み込み中...</span>
+                </div>
+            </header>
+
+            <!-- ダッシュボード領域（左右レイアウト） -->
+            <div class="p-6 grid grid-cols-1 xl:grid-cols-3 gap-6">
+                
+                <!-- 左側2カラム：メインのグラフエリア -->
+                <div class="xl:col-span-2 space-y-6">
+                    
+                    <!-- PFC棒グラフ & 8軸レーダーチャート -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <!-- PFCバランス棒グラフ -->
+                        <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+                            <h3 class="text-sm font-bold text-gray-700 mb-4">PFCバランス (過去7日間平均 vs 理想)</h3>
+                            <div class="relative h-64">
+                                <canvas id="pfcChart"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- 8軸 栄養レーダーチャート -->
+                        <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+                            <h3 class="text-sm font-bold text-gray-700 mb-4">栄養バランス (過去7日間の平均)</h3>
+                            <div class="relative h-64">
+                                <canvas id="radarChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- PFCの推移折れ線グラフ -->
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+                        <h3 class="text-sm font-bold text-gray-700 mb-4">PFCの推移 (過去7日間)</h3>
+                        <div class="relative h-56">
+                            <canvas id="pfcTrendChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- 日別摂取量カードリスト -->
+                    <div>
+                        <h3 class="text-sm font-bold text-gray-700 mb-3">1日あたりの摂取量 (過去7日間)</h3>
+                        <div id="dailyCards" class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+                            <!-- JSで動的描画 -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 右側1カラム：サマリー・不足栄養素・AIアドバイス -->
+                <div class="space-y-6">
+                    
+                    <!-- 今週の栄養サマリー -->
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+                        <h3 class="text-sm font-bold text-gray-700 mb-4">今週の栄養サマリー</h3>
+                        <div class="grid grid-cols-2 gap-4 border-b border-gray-100 pb-4 mb-4">
+                            <div>
+                                <p class="text-xs text-gray-400">栄養バランススコア</p>
+                                <p class="text-3xl font-extrabold text-gray-800 mt-1"><span id="scoreVal">84</span><span class="text-sm text-gray-400 font-normal"> / 100</span></p>
+                                <span class="inline-block mt-1 text-xs text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full font-bold">Good!</span>
+                            </div>
+                            <div>
+                                <p class="text-xs text-gray-400">目標達成日数</p>
+                                <p class="text-3xl font-extrabold text-gray-800 mt-1"><span id="successDays">5</span><span class="text-sm text-gray-400 font-normal"> / 7日</span></p>
+                                <p class="text-[11px] text-gray-400 mt-1">あと2日で今週の目標達成！</p>
+                            </div>
+                        </div>
+                        <div>
+                            <p class="text-xs text-gray-400">平均摂取カロリー</p>
+                            <p class="text-xl font-extrabold text-gray-800 mt-0.5"><span id="avgCal">1,852</span> <span class="text-xs text-gray-500 font-normal">kcal / 日</span></p>
+                            <p class="text-xs text-gray-400 mt-0.5">目標: <span id="targetCal">2,000</span> kcal</p>
+                        </div>
+                    </div>
+
+                    <!-- 平均して不足している栄養素 -->
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+                        <h3 class="text-sm font-bold text-gray-700 mb-4">平均して不足している栄養素</h3>
+                        <div id="deficiencyList" class="space-y-3">
+                            <!-- JSで動的挿入 -->
+                        </div>
+                    </div>
+
+                    <!-- AIからのアドバイス -->
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+                        <div class="flex justify-between items-center mb-3">
+                            <h3 class="text-sm font-bold text-gray-700">AIからのアドバイス</h3>
+                            <span class="text-[10px] font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full">プロプラン限定</span>
+                        </div>
+                        <p class="text-xs text-gray-600 leading-relaxed">
+                            今週の栄養バランスは全体的に良好です！特にたんぱく質がしっかり摂れています。<br>
+                            脂質と食物繊維がやや不足気味なので、ナッツ類やアボカド、野菜を意識的に取り入れるとさらにバランスが良くなりますよ。
+                        </p>
+                        <button class="mt-4 w-full py-2 bg-emerald-50 text-emerald-600 text-xs font-bold rounded-xl hover:bg-emerald-100 transition">
+                            詳細な分析を見る →
+                        </button>
+                    </div>
+
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const MY_LIFF_ID = "2011063084-sSBZXflI";
+        // ★ご自身のGASデプロイURLに置き換えてください
+        const GAS_URL = "https://script.google.com/macros/s/XXXXX/exec";
+
+        let pfcChartInstance = null;
+        let radarChartInstance = null;
+        let pfcTrendChartInstance = null;
+
+        async function initLiff() {
+            try {
+                await liff.init({ liffId: MY_LIFF_ID });
+                if (liff.isLoggedIn()) {
+                    const profile = await liff.getProfile();
+                    fetchDashboardData(profile.userId);
+                } else {
+                    loadDummyData();
                 }
-            ]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                r: {
-                    beginAtZero: true,
-                    max: 140,
-                    ticks: {
-                        stepSize: 20,
-                        display: false
-                    }
-                }
+            } catch (err) {
+                loadDummyData();
             }
         }
-    });
-}
+
+        async function fetchDashboardData(userId) {
+            try {
+                const response = await fetch(`${GAS_URL}?userId=${userId}`);
+                const data = await response.json();
+
+                if (data.error) return alert("エラー: " + data.error);
+
+                // UIの反映
+                document.getElementById('userName').textContent = (data.user.name || "ユーザー") + " さん";
+                document.getElementById('scoreVal').textContent = data.summary.score;
+                document.getElementById('successDays').textContent = data.summary.successDays;
+                document.getElementById('avgCal').textContent = data.stats.avgCalories.toLocaleString();
+                document.getElementById('targetCal').textContent = data.ideal.calories.toLocaleString();
+
+                renderPfcChart(data.stats, data.ideal);
+                renderRadarChart(data.stats, data.ideal);
+                renderPfcTrendChart(data.daily);
+                renderDailyCards(data.daily);
+                renderDeficiencies(data.summary.deficiencies);
+
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        // 1. PFCバランス (実データ vs 理想)
+        function renderPfcChart(stats, ideal) {
+            const ctx = document.getElementById('pfcChart').getContext('2d');
+            if (pfcChartInstance) pfcChartInstance.destroy();
+
+            pfcChartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['P (たんぱく質)', 'F (脂質)', 'C (炭水化物)'],
+                    datasets: [
+                        { label: '平均 (g)', data: [stats.avgProtein, stats.avgFat, stats.avgCarbs], backgroundColor: ['#3B82F6', '#F97316', '#10B981'], borderRadius: 6 },
+                        { label: '目標 (g)', data: [ideal.protein, ideal.fat, ideal.carbs], type: 'line', borderColor: '#9CA3AF', borderWidth: 2, borderDash: [5, 5], pointRadius: 3, fill: false }
+                    ]
+                },
+                options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+            });
+        }
+
+        // 2. 8軸 栄養レーダーチャート
+        // 8軸レーダーチャート（PFC + 食物繊維 + ビタミン類 + 筋肥大必須ミネラル）
+        function renderRadarChart(stats, ideal) {
+            const ctx = document.getElementById('radarChart').getContext('2d');
+            if (radarChartInstance) radarChartInstance.destroy();
+
+            // 各項目の達成率(%)計算
+            const pPct = Math.round((stats.avgProtein / ideal.protein) * 100) || 0;
+            const fPct = Math.round((stats.avgFat / ideal.fat) * 100) || 0;
+            const cPct = Math.round((stats.avgCarbs / ideal.carbs) * 100) || 0;
+            const fiberPct = Math.round(((stats.avgFiber || 14) / ideal.fiber) * 100) || 0;
+            
+            // ビタミン類（統合スコア・達成率）
+            const vitPct = stats.avgVitamins || 80; 
+            
+            // 筋肥大特化ミネラル
+            const zincPct = Math.round(((stats.avgZinc || 8) / (ideal.zinc || 10)) * 100) || 0;
+            const magPct = Math.round(((stats.avgMagnesium || 260) / (ideal.magnesium || 320)) * 100) || 0;
+            const sodiumPct = Math.round(((stats.avgSodium || 7) / (ideal.sodium || 8)) * 100) || 0;
+
+            radarChartInstance = new Chart(ctx, {
+                type: 'radar',
+                data: {
+                    labels: [
+                        'たんぱく質', 
+                        '脂質', 
+                        '炭水化物', 
+                        '食物繊維', 
+                        'ビタミン類', 
+                        '亜鉛', 
+                        'マグネシウム', 
+                        '塩分(ナトリウム)'
+                    ],
+                    datasets: [
+                        {
+                            label: '過去7日間の平均摂取量',
+                            data: [pPct, fPct, cPct, fiberPct, vitPct, zincPct, magPct, sodiumPct],
+                            borderColor: '#3B82F6',
+                            backgroundColor: 'rgba(59, 130, 246, 0.2)',
+                            pointBackgroundColor: '#3B82F6',
+                            borderWidth: 2
+                        },
+                        {
+                            label: '理想値 (目標100%)',
+                            data: [100, 100, 100, 100, 100, 100, 100, 100],
+                            borderColor: '#9CA3AF',
+                            borderWidth: 1.5,
+                            borderDash: [4, 4],
+                            pointRadius: 0,
+                            fill: false
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        r: {
+                            beginAtZero: true,
+                            max: 140,
+                            ticks: {
+                                stepSize: 20,
+                                display: false
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // 3. PFC推移グラフ
+        function renderPfcTrendChart(dailyData) {
+            const ctx = document.getElementById('pfcTrendChart').getContext('2d');
+            if (pfcTrendChartInstance) pfcTrendChartInstance.destroy();
+
+            pfcTrendChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: dailyData.map(d => d.label),
+                    datasets: [
+                        { label: 'P (たんぱく質)', data: dailyData.map(d => d.protein), borderColor: '#3B82F6', tension: 0.2 },
+                        { label: 'F (脂質)', data: dailyData.map(d => d.fat), borderColor: '#F97316', tension: 0.2 },
+                        { label: 'C (炭水化物)', data: dailyData.map(d => d.carbs), borderColor: '#10B981', tension: 0.2 }
+                    ]
+                },
+                options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+            });
+        }
+
+        // 4. 日別カード
+        function renderDailyCards(dailyData) {
+            const container = document.getElementById('dailyCards');
+            container.innerHTML = dailyData.map(d => `
+                <div class="bg-white p-3 rounded-xl border border-gray-200 text-center shadow-sm">
+                    <p class="text-xs font-bold text-gray-500">${d.label}</p>
+                    <p class="text-sm font-extrabold text-gray-800 my-1">${d.calories} <span class="text-xs font-normal">kcal</span></p>
+                    <div class="text-[10px] text-gray-500 space-y-0.5">
+                        <p>P: ${d.protein}g</p><p>F: ${d.fat}g</p><p>C: ${d.carbs}g</p>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // 5. 不足栄養素リスト
+        function renderDeficiencies(defList) {
+            const container = document.getElementById('deficiencyList');
+            if (!defList || defList.length === 0) {
+                container.innerHTML = `<p class="text-xs text-emerald-600 font-bold">🎉 現在不足している主要栄養素はありません！</p>`;
+                return;
+            }
+            container.innerHTML = defList.map(item => `
+                <div class="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
+                    <div>
+                        <p class="text-xs font-bold text-gray-700">${item.name}</p>
+                        <p class="text-[11px] text-gray-400 mt-0.5">あと <span class="font-bold text-gray-600">${item.diff}</span></p>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-[10px] text-gray-400">おすすめ食品</p>
+                        <p class="text-xs font-bold text-emerald-600 mt-0.5">${item.food}</p>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // PCテスト用ダミーデータ
+        function loadDummyData() {
+            document.getElementById('userName').textContent = "Chiaki さん";
+            const dummyIdeal = { calories: 2000, protein: 100, fat: 55, carbs: 275, fiber: 20, vitamins: 100, zinc: 10, magnesium: 320, iron: 7.5 };
+            const dummyStats = { avgCalories: 1852, avgProtein: 112, avgFat: 43, avgCarbs: 250, avgFiber: 14, avgVitamins: 80, avgZinc: 8.5, avgMagnesium: 280, avgIron: 5.5 };
+            const dummyDaily = [
+                { label: '5/12(月)', calories: 1950, protein: 110, fat: 55, carbs: 270 },
+                { label: '5/13(火)', calories: 1870, protein: 105, fat: 48, carbs: 265 },
+                { label: '5/14(水)', calories: 1920, protein: 108, fat: 52, carbs: 275 },
+                { label: '5/15(木)', calories: 1780, protein: 100, fat: 45, carbs: 240 },
+                { label: '5/16(金)', calories: 1900, protein: 112, fat: 56, carbs: 260 },
+                { label: '5/17(土)', calories: 1800, protein: 98, fat: 40, carbs: 250 },
+                { label: '5/18(日)', calories: 1880, protein: 107, fat: 50, carbs: 262 }
+            ];
+            const dummyDef = [
+                { name: "脂質 (Fat)", diff: "12g / 日", food: "アボカド、ナッツ類" },
+                { name: "食物繊維 (Fiber)", diff: "6g / 日", food: "きのこ類、野菜類" },
+                { name: "鉄分 (Iron)", diff: "2.0mg / 日", food: "ほうれん草、赤身肉" }
+            ];
+
+            renderPfcChart(dummyStats, dummyIdeal);
+            renderRadarChart(dummyStats, dummyIdeal);
+            renderPfcTrendChart(dummyDaily);
+            renderDailyCards(dummyDaily);
+            renderDeficiencies(dummyDef);
+        }
+
+        initLiff();
+    </script>
+</body>
+</html>
