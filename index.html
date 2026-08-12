@@ -243,6 +243,16 @@
                 document.getElementById('userName').textContent =
                     (data.user.name || "ユーザー") + " さん";
 
+                // PRO / FREE バッジの動的切り替え
+                const planBadge = document.getElementById('planBadge');
+                if (data.user.isPremium) {
+                    planBadge.textContent = "PRO MEMBER";
+                    planBadge.className = "text-xs font-medium bg-amber-100 text-amber-800 px-3 py-1 rounded-full font-bold";
+                } else {
+                    planBadge.textContent = "FREE MEMBER";
+                    planBadge.className = "text-xs font-medium bg-gray-100 text-gray-600 px-3 py-1 rounded-full";
+                }
+
                 document.getElementById('scoreVal').textContent =
                     data.summary.score;
 
