@@ -3,7 +3,34 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nutrition Dashboard</title>
+    <style>
+        /* 表示切り替え用クラス */
+        .hidden {
+            display: none !important;
+        }
+
+        /* スケルトンローディング用アニメーション */
+        .skeleton {
+            background-color: #e2e5e7;
+            background-image: linear-gradient(
+                90deg,
+                rgba(255, 255, 255, 0),
+                rgba(255, 255, 255, 0.5),
+                rgba(255, 255, 255, 0)
+            );
+            background-size: 40px 100%;
+            background-repeat: no-repeat;
+            background-position: left -40px top 0;
+            animation: shine 1.2s ease infinite;
+        }
+
+        @keyframes shine {
+            to {
+                background-position: right -40px top 0;
+            }
+        }
+    </style>
+    <title>栄養管理画面</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Chart.js CDN -->
@@ -13,7 +40,33 @@
 </head>
 <body class="bg-gray-100 font-sans text-gray-800">
 
-    <div class="flex h-screen overflow-hidden">
+    <!-- ① ローディング画面 -->
+    <div id="loading-view" class="flex flex-col items-center justify-center min-h-screen p-4 space-y-4">
+        <div class="skeleton w-full max-w-md h-32 rounded-xl"></div>
+        <div class="skeleton w-full max-w-md h-64 rounded-xl"></div>
+        <div class="skeleton w-full max-w-md h-64 rounded-xl"></div>
+        <p class="text-gray-500 font-bold mt-4">
+            データを読み込み中...
+        </p>
+    </div>
+
+    <!-- ② Empty State -->
+    <div id="empty-view" class="hidden flex flex-col items-center justify-center min-h-screen text-center p-4">
+        <div class="text-6xl mb-4">🍽️</div>
+
+        <h2 class="text-xl font-bold text-gray-700 mb-2">
+            まだ食事記録がありません
+        </h2>
+
+        <p class="text-gray-500 mb-6">
+            LINEで今日の食事を記録して、<br>
+            ダッシュボードを活用しましょう！
+        </p>
+    </div>
+
+    <!-- ③ メインダッシュボード -->
+    <div id="dashboard-view" class="hidden">
+        <div class="flex h-screen overflow-hidden">
         <!-- 左側サイドバー -->
         <aside class="w-64 bg-white border-r border-gray-200 hidden md:flex flex-col">
             <div class="p-6 border-b border-gray-100">
@@ -134,6 +187,7 @@
             </div>
         </main>
     </div>
+    </div>
 
     <script>
         const MY_LIFF_ID = "2011063084-sSBZXflI";
@@ -159,14 +213,65 @@
         }
 
         async function fetchDashboardData(userId) {
+            const loadingView = document.getElementById('loading-view');
+            const emptyView = document.getElementById('empty-view');
+            const dashboardView = document.getElementById('dashboard-view');
+
             try {
                 const response = await fetch(`${GAS_URL}?userId=${userId}`);
                 const data = await response.json();
 
-                if (data.error) return alert("エラー: " + data.error);
+                if (data.error) {
+                    loadingView.classList.add('hidden');
+                    alert("エラー: " + data.error);
+                    return;
+                }
+
+                // ローディング画面を非表示
+                loadingView.classList.add('hidden');
+
+                // データが存在しない場合
+                if (!data.daily || data.daily.length === 0) {
+                    emptyView.classList.remove('hidden');
+                    return;
+                }
+
+                // データが存在する場合
+                dashboardView.classList.remove('hidden');
 
                 // UIの反映
-                document.getElementById('userName').textContent = (data.user.name || "ユーザー") + " さん";
+                document.getElementById('userName').textContent =
+                    (data.user.name || "ユーザー") + " さん";
+
+                document.getElementById('scoreVal').textContent =
+                    data.summary.score;
+
+                document.getElementById('successDays').textContent =
+                    data.summary.successDays;
+
+                document.getElementById('avgCal').textContent =
+                    data.stats.avgCalories.toLocaleString();
+
+                document.getElementById('targetCal').textContent =
+                    data.ideal.calories.toLocaleString();
+
+                renderPfcChart(data.stats, data.ideal);
+                renderRadarChart(data.stats, data.ideal);
+                renderPfcTrendChart(data.daily);
+                renderDailyCards(data.daily);
+                renderDeficiencies(data.summary.deficiencies);
+
+            } catch (err) {
+                console.error(err);
+
+                loadingView.innerHTML = `
+                    <p class="text-red-500 font-bold text-center">
+                        通信エラーが発生しました。<br>
+                        画面をリロードしてください。
+                    </p>
+                `;
+            }
+        }
                 document.getElementById('scoreVal').textContent = data.summary.score;
                 document.getElementById('successDays').textContent = data.summary.successDays;
                 document.getElementById('avgCal').textContent = data.stats.avgCalories.toLocaleString();
@@ -327,7 +432,12 @@
 
         // PCテスト用ダミーデータ
         function loadDummyData() {
+            document.getElementById('loading-view').classList.add('hidden');
+            document.getElementById('dashboard-view').classList.remove('hidden');
+
             document.getElementById('userName').textContent = "Chiaki さん";
+
+            const dummyIdeal = {
             const dummyIdeal = { calories: 2000, protein: 100, fat: 55, carbs: 275, fiber: 20, vitamins: 100, zinc: 10, magnesium: 320, iron: 7.5 };
             const dummyStats = { avgCalories: 1852, avgProtein: 112, avgFat: 43, avgCarbs: 250, avgFiber: 14, avgVitamins: 80, avgZinc: 8.5, avgMagnesium: 280, avgIron: 5.5 };
             const dummyDaily = [
