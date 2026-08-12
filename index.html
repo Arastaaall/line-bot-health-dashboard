@@ -272,21 +272,6 @@
                 `;
             }
         }
-                document.getElementById('scoreVal').textContent = data.summary.score;
-                document.getElementById('successDays').textContent = data.summary.successDays;
-                document.getElementById('avgCal').textContent = data.stats.avgCalories.toLocaleString();
-                document.getElementById('targetCal').textContent = data.ideal.calories.toLocaleString();
-
-                renderPfcChart(data.stats, data.ideal);
-                renderRadarChart(data.stats, data.ideal);
-                renderPfcTrendChart(data.daily);
-                renderDailyCards(data.daily);
-                renderDeficiencies(data.summary.deficiencies);
-
-            } catch (err) {
-                console.error(err);
-            }
-        }
 
         // 1. PFCバランス (実データ vs 理想)
         function renderPfcChart(stats, ideal) {
@@ -438,7 +423,17 @@
             document.getElementById('userName').textContent = "Chiaki さん";
 
             const dummyIdeal = {
-            const dummyIdeal = { calories: 2000, protein: 100, fat: 55, carbs: 275, fiber: 20, vitamins: 100, zinc: 10, magnesium: 320, iron: 7.5 };
+                calories: 2000,
+                protein: 100,
+                fat: 55,
+                carbs: 275,
+                fiber: 20,
+                vitamins: 100,
+                zinc: 10,
+                magnesium: 320,
+                iron: 7.5
+            };
+            
             const dummyStats = { avgCalories: 1852, avgProtein: 112, avgFat: 43, avgCarbs: 250, avgFiber: 14, avgVitamins: 80, avgZinc: 8.5, avgMagnesium: 280, avgIron: 5.5 };
             const dummyDaily = [
                 { label: '5/12(月)', calories: 1950, protein: 110, fat: 55, carbs: 270 },
