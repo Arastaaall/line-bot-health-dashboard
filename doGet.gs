@@ -1,67 +1,33 @@
 // ==========================================
-// WebアプリのHTML配信 (doGet) - テンプレート版
+// WebアプリのHTML配信 (doGet)
 // ==========================================
 function doGet(e) {
-  // ★ 追加: action=configの場合はJSON設定を返す
+  // action=configの場合はJSON設定を返す
   if (e.parameter.action === 'config') {
     const props = PropertiesService.getScriptProperties();
     return ContentService.createTextOutput(JSON.stringify({
       LIFF_ID: props.getProperty('LIFF_ID')
-    })).setMimeType(ContentService.MimeType.JSON);
+    }))
+    .setMimeType(ContentService.MimeType.JSON)
+    .setHeader('Access-Control-Allow-Origin', '*');
   }
-
-  // 通常のHTML配信（既存のまま）
-  const template = HtmlService.createTemplateFromFile('index');
-  const props = PropertiesService.getScriptProperties();
-  const liffId = props.getProperty('LIFF_ID');
-  const gasUrl = ScriptApp.getService().getUrl();
-
-  Logger.log("LIFF_ID: " + liffId);
-  Logger.log("GAS_URL: " + gasUrl);
-
-  template.LIFF_ID = liffId;
-  template.GAS_URL = gasUrl;
-
-  return template.evaluate()
+  
+  // 通常のデータ取得（userIdパラメータがある場合）
+  const userId = e ? e.parameter.userId : null;
+  if (userId) {
+    return handleGetData(userId);
+  }
+  
+  // HTMLを返す（LIFF用）
+  return HtmlService.createHtmlOutputFromFile('index')
     .setTitle('栄養管理ダッシュボード')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
-// ==========================================
-// Dashboard Web API (doPost) - セキュアな認証版
-// ==========================================
-function doPost(e) {
+// GETリクエストのデータ取得処理
+function handleGetData(userId) {
   try {
-    // 1. POSTボディからトークンを取得
-    const requestData = JSON.parse(e.postData.contents);
-    const token = requestData.token;
-
-    if (!token) {
-      return ContentService.createTextOutput(JSON.stringify({ error: "Token is required" }))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-
-    // 2. LINEのProfile APIを使って、トークンから正規のuserIdを取得 (本人確認)
-    const profileResponse = UrlFetchApp.fetch("https://api.line.me/v2/profile", {
-      method: "get",
-      headers: {
-        "Authorization": "Bearer " + token
-      },
-      muteHttpExceptions: true
-    });
-
-    if (profileResponse.getResponseCode() !== 200) {
-      return ContentService.createTextOutput(JSON.stringify({ error: "Invalid token or LINE API error" }))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-
-    const profile = JSON.parse(profileResponse.getContentText());
-    const userId = profile.userId; // ここで初めて「信頼できる正規のuserId」が確定する
-
-    // ==========================================
-    // 3. 以降は、確定した userId を使って元のロジックを実行
-    // ==========================================
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     
     // --- usersシートの取得 ---
@@ -79,7 +45,7 @@ function doPost(e) {
     };
     
     for (let i = 1; i < usersData.length; i++) {
-      if (usersData[i][getIdx('user_id')] === userId) { // ここで確定したuserIdを使用
+      if (usersData[i][getIdx('user_id')] === userId) {
         userData.name = usersData[i][getIdx('User_Name')] || usersData[i][getIdx('user_name')] || "ユーザー";
         userData.targetCalories = Number(usersData[i][getIdx('target_calories')]) || 2000;
         userData.targetWeight = Number(usersData[i][getIdx('target_weight')]) || 60;
@@ -87,8 +53,8 @@ function doPost(e) {
         break;
       }
     }
-
-    // --- 理想目標値の計算 (元のロジックを流用) ---
+    
+    // --- 理想目標値の計算 ---
     const idealCal = userData.targetCalories || userData.tdee;
     const ideal = {
       calories: idealCal,
@@ -102,8 +68,8 @@ function doPost(e) {
       sodium: 8,
       iron: 7.5
     };
-
-    // --- logsシートから過去7日分の集計 (元のロジックを流用) ---
+    
+    // --- logsシートから過去7日分の集計 ---
     const logsSheet = ss.getSheetByName('logs');
     const logsData = logsSheet.getDataRange().getValues();
     const logHeader = logsData[0];
@@ -124,7 +90,7 @@ function doPost(e) {
     
     for (let i = 1; i < logsData.length; i++) {
       const row = logsData[i];
-      if (row[getLogIdx('user_id')] === userId) { // ここで確定したuserIdを使用
+      if (row[getLogIdx('user_id')] === userId) {
         const rawDate = new Date(row[getLogIdx('timestamp')]);
         if (!isNaN(rawDate)) {
           const dateKey = Utilities.formatDate(rawDate, Session.getScriptTimeZone(), "yyyy-MM-dd");
@@ -201,10 +167,55 @@ function doPost(e) {
     };
     
     return ContentService.createTextOutput(JSON.stringify(response))
-      .setMimeType(ContentService.MimeType.JSON);
+      .setMimeType(ContentService.MimeType.JSON)
+      .setHeader('Access-Control-Allow-Origin', '*');
       
   } catch (error) {
     return ContentService.createTextOutput(JSON.stringify({ error: "Server error: " + error.toString() }))
-      .setMimeType(ContentService.MimeType.JSON);
+      .setMimeType(ContentService.MimeType.JSON)
+      .setHeader('Access-Control-Allow-Origin', '*');
+  }
+}
+
+// ==========================================
+// Dashboard Web API (doPost) - セキュアな認証版
+// ==========================================
+function doPost(e) {
+  try {
+    // 1. POSTボディからトークンを取得
+    const requestData = JSON.parse(e.postData.contents);
+    const token = requestData.token;
+
+    if (!token) {
+      return ContentService.createTextOutput(JSON.stringify({ error: "Token is required" }))
+        .setMimeType(ContentService.MimeType.JSON)
+        .setHeader('Access-Control-Allow-Origin', '*');
+    }
+
+    // 2. LINEのProfile APIを使って、トークンから正規のuserIdを取得 (本人確認)
+    const profileResponse = UrlFetchApp.fetch("https://api.line.me/v2/profile", {
+      method: "get",
+      headers: {
+        "Authorization": "Bearer " + token
+      },
+      muteHttpExceptions: true
+    });
+
+    if (profileResponse.getResponseCode() !== 200) {
+      return ContentService.createTextOutput(JSON.stringify({ error: "Invalid token or LINE API error" }))
+        .setMimeType(ContentService.MimeType.JSON)
+        .setHeader('Access-Control-Allow-Origin', '*');
+    }
+
+    const profile = JSON.parse(profileResponse.getContentText());
+    const userId = profile.userId;
+
+    // 3. GETリクエストと同じ処理を実行
+    return handleGetData(userId);
+      
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({ error: "Server error: " + error.toString() }))
+      .setMimeType(ContentService.MimeType.JSON)
+      .setHeader('Access-Control-Allow-Origin', '*');
   }
 }
