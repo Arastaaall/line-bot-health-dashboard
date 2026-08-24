@@ -191,15 +191,39 @@
 
     <script>
         // GASテンプレート変数（GAS側で展開される）
-        const MY_LIFF_ID = "<?= LIFF_ID ?>";
-        const GAS_URL = "<?= GAS_URL ?>";
+        const MY_LIFF_ID = "";
+        const GAS_URL = "https://script.google.com/macros/s/AKfycbxEl3VIa628NdVq3psrRXQXZhDcIS7MfofpM4IvHa3gEUBx2Y3_Uu4lqpnPS7DRTNtC/exec";
 
         let pfcChartInstance = null;
         let radarChartInstance = null;
         let pfcTrendChartInstance = null;
 
+        // 1. GAS から LIFF_ID を取得
+        async function loadConfig() {
+            try {
+                const configRes = await fetch(`${GAS_URL}?action=config`);
+                if (!configRes.ok) {
+                    throw new Error(`設定取得エラー: ${configRes.status}`);
+                }
+                const config = await configRes.json();
+                MY_LIFF_ID = config.LIFF_ID;
+                console.log("LIFF_IDを取得:", MY_LIFF_ID);
+            } catch (err) {
+                console.error("設定の取得に失敗:", err);
+                throw err;
+            }
+        }
+
+        // 2. LIFF初期化
         async function initLiff() {
             try {
+                // 設定を取得してからLIFFを初期化
+                await loadConfig();
+                
+                if (!MY_LIFF_ID) {
+                    throw new Error("LIFF_IDが取得できませんでした");
+                }
+
                 await liff.init({ liffId: MY_LIFF_ID });
 
                 if (!liff.isLoggedIn()) {
@@ -213,10 +237,14 @@
             } catch (err) {
                 console.error("LIFF error:", err);
                 document.getElementById('loading-view').innerHTML = `
-                    <p class="text-red-500 font-bold text-center">
-                        エラーが発生しました<br>
-                        <span class="text-sm font-normal">${err.message}</span>
-                    </p>
+                    <div class="text-center">
+                        <div class="text-6xl mb-4">⚠️</div>
+                        <p class="text-red-600 font-bold text-xl mb-2">エラーが発生しました</p>
+                        <p class="text-gray-600 mb-6">${err.message}</p>
+                        <button onclick="location.reload()" class="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition">
+                            ページを再読み込み
+                        </button>
+                    </div>
                 `;
             }
         }
@@ -227,15 +255,7 @@
             const dashboardView = document.getElementById('dashboard-view');
 
             try {
-                const response = await fetch(GAS_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-                    body: JSON.stringify({ 
-                        token: liff.getAccessToken(),
-                        userId: userId 
-                    })
-                });
-                
+                const response = await fetch(`${GAS_URL}?userId=${userId}`);
                 const data = await response.json();
 
                 if (data.error) {
