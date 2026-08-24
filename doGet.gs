@@ -1,22 +1,24 @@
 // ==========================================
-// WebアプリのHTML配信 (doGet)
+// WebアプリのHTML配信 (doGet) - テンプレート版
 // ==========================================
 function doGet(e) {
+  // 1. HTMLファイルをテンプレートとして読み込む
   const template = HtmlService.createTemplateFromFile('index');
+  
+  // 2. スクリプトプロパティから値を取得
   const props = PropertiesService.getScriptProperties();
+  const liffId = props.getProperty('LIFF_ID');
+  const gasUrl = ScriptApp.getService().getUrl();
   
-  // 1. プロパティを取得
-  const liffIdFromProps = props.getProperty('LIFF_ID');
+  // デバッグ用ログ
+  Logger.log("LIFF_ID: " + liffId);
+  Logger.log("GAS_URL: " + gasUrl);
   
-  // 2. デバッグ用ログ出力（GASのエディタ上部「実行数」で確認可能）
-  Logger.log("取得した LIFF_ID: " + liffIdFromProps);
+  // 3. テンプレート変数に値を割り当て
+  template.LIFF_ID = liffId;
+  template.GAS_URL = gasUrl;
   
-  // 3. もしプロパティが取得できていなければ、一時的に直接 ID を埋め込む（フォールバック）
-  // これで動作すれば、間違いなく「スクリプトプロパティの設定ミス」です
-  template.LIFF_ID = liffIdFromProps || "2011063084-sSBZXflI"; 
-  
-  template.GAS_URL = ScriptApp.getService().getUrl();
-  
+  // 4. HTMLとして返す
   return template.evaluate()
     .setTitle('栄養管理ダッシュボード')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')

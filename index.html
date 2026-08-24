@@ -1,23 +1,203 @@
 <!DOCTYPE html>
-<html>
+<html lang="ja">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>栄養管理ダッシュボード</title>
-  <!-- Tailwind CSSなどは既存のまま -->
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   
   <!-- LIFF SDK -->
   <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  
+  <style>
+    .gradient-bg {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+    .card-shadow {
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    }
+  </style>
 </head>
-<body>
-  <!-- (中略: ローディング画面やダッシュボードのHTML) -->
+<body class="bg-gray-50">
+
+  <!-- ローディング画面 -->
+  <div id="loading-view" class="fixed inset-0 bg-white flex items-center justify-center z-50">
+    <div class="text-center">
+      <div class="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500 mx-auto mb-4"></div>
+      <p class="text-gray-600 font-bold">認証中...</p>
+      <p class="text-sm text-gray-400 mt-2">LINEアカウントを確認しています</p>
+    </div>
+  </div>
+
+  <!-- エラー表示 -->
+  <div id="error-view" class="hidden fixed inset-0 bg-white flex items-center justify-center z-50">
+    <div class="text-center p-8">
+      <div class="text-red-500 text-6xl mb-4">⚠️</div>
+      <p class="text-red-600 font-bold text-xl mb-2">エラーが発生しました</p>
+      <p id="error-message" class="text-gray-600 mb-6"></p>
+      <button onclick="location.reload()" class="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition">
+        ページを再読み込み
+      </button>
+    </div>
+  </div>
+
+  <!-- メインコンテンツ -->
+  <div id="main-content" class="hidden">
+    
+    <!-- ヘッダー -->
+    <header class="gradient-bg text-white py-6 px-4">
+      <div class="max-w-4xl mx-auto">
+        <div class="flex items-center justify-between">
+          <div>
+            <h1 class="text-2xl font-bold">NUTRITION DASHBOARD</h1>
+            <p id="user-name" class="text-blue-100 mt-1">ユーザー名</p>
+          </div>
+          <div id="premium-badge" class="hidden bg-yellow-400 text-yellow-900 px-3 py-1 rounded-full text-sm font-bold">
+            PRO MEMBER
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- ナビゲーション -->
+    <nav class="bg-white shadow-sm px-4 py-3">
+      <div class="max-w-4xl mx-auto">
+        <div class="flex space-x-4 overflow-x-auto">
+          <a href="#" class="flex items-center space-x-2 px-4 py-2 bg-blue-50 text-blue-600 rounded-lg whitespace-nowrap">
+            <span>📊</span>
+            <span>ダッシュボード</span>
+          </a>
+          <a href="#" class="flex items-center space-x-2 px-4 py-2 text-gray-600 hover:bg-gray-50 rounded-lg whitespace-nowrap">
+            <span>🥗</span>
+            <span>食事記録</span>
+          </a>
+          <a href="#" class="flex items-center space-x-2 px-4 py-2 text-gray-600 hover:bg-gray-50 rounded-lg whitespace-nowrap">
+            <span>📈</span>
+            <span>栄養グラフ</span>
+          </a>
+          <a href="#" class="flex items-center space-x-2 px-4 py-2 text-gray-600 hover:bg-gray-50 rounded-lg whitespace-nowrap">
+            <span>⚙️</span>
+            <span>設定</span>
+          </a>
+        </div>
+      </div>
+    </nav>
+
+    <!-- メインコンテンツエリア -->
+    <main class="max-w-4xl mx-auto p-4 space-y-6">
+      
+      <!-- 今週のサマリー -->
+      <section class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="bg-white rounded-xl card-shadow p-6">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-gray-500 text-sm">栄養バランススコア</p>
+              <p id="score-value" class="text-3xl font-bold text-blue-600 mt-1">--</p>
+            </div>
+            <div class="text-4xl">📊</div>
+          </div>
+          <p id="score-text" class="text-sm text-gray-600 mt-2">--</p>
+        </div>
+        
+        <div class="bg-white rounded-xl card-shadow p-6">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-gray-500 text-sm">目標達成日数</p>
+              <p id="success-days" class="text-3xl font-bold text-green-600 mt-1">-- / 7日</p>
+            </div>
+            <div class="text-4xl">🎯</div>
+          </div>
+          <p class="text-sm text-gray-600 mt-2">今週の目標</p>
+        </div>
+        
+        <div class="bg-white rounded-xl card-shadow p-6">
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-gray-500 text-sm">平均摂取カロリー</p>
+              <p id="avg-calories" class="text-3xl font-bold text-orange-600 mt-1">-- kcal</p>
+            </div>
+            <div class="text-4xl">🔥</div>
+          </div>
+          <p id="target-calories" class="text-sm text-gray-600 mt-2">目標: -- kcal</p>
+        </div>
+      </section>
+
+      <!-- PFCバランスチャート -->
+      <section class="bg-white rounded-xl card-shadow p-6">
+        <h2 class="text-lg font-bold text-gray-800 mb-4">PFCバランス (過去7日間平均 vs 理想)</h2>
+        <canvas id="pfc-chart" height="100"></canvas>
+      </section>
+
+      <!-- 1週間の推移 -->
+      <section class="bg-white rounded-xl card-shadow p-6">
+        <h2 class="text-lg font-bold text-gray-800 mb-4">1日あたりの摂取量 (過去7日間)</h2>
+        <canvas id="weekly-chart" height="100"></canvas>
+      </section>
+
+      <!-- 栄養バランス詳細 -->
+      <section class="bg-white rounded-xl card-shadow p-6">
+        <h2 class="text-lg font-bold text-gray-800 mb-4">栄養バランス (過去7日間の平均)</h2>
+        <div class="space-y-4" id="nutrition-details">
+          <!-- JavaScriptで動的に生成 -->
+        </div>
+      </section>
+
+      <!-- 不足栄養素 -->
+      <section class="bg-white rounded-xl card-shadow p-6">
+        <h2 class="text-lg font-bold text-gray-800 mb-4">平均して不足している栄養素</h2>
+        <div id="deficiencies-list" class="space-y-3">
+          <!-- JavaScriptで動的に生成 -->
+        </div>
+      </section>
+
+      <!-- AIアドバイス (Pro会員限定) -->
+      <section id="ai-advice-section" class="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-xl card-shadow p-6 text-white hidden">
+        <div class="flex items-center space-x-2 mb-4">
+          <span class="text-2xl">🤖</span>
+          <h2 class="text-lg font-bold">AIからのアドバイス</h2>
+          <span class="bg-yellow-400 text-yellow-900 text-xs px-2 py-1 rounded-full font-bold">PRO</span>
+        </div>
+        <p id="ai-advice-text" class="text-purple-100 leading-relaxed">
+          詳細な分析を読み込んでいます...
+        </p>
+      </section>
+
+      <!-- 食事記録がない場合のメッセージ -->
+      <section id="no-records" class="hidden bg-white rounded-xl card-shadow p-8 text-center">
+        <div class="text-6xl mb-4">️</div>
+        <h3 class="text-xl font-bold text-gray-800 mb-2">まだ食事記録がありません</h3>
+        <p class="text-gray-600 mb-6">LINEで今日の食事を記録して、ダッシュボードを活用しましょう！</p>
+        <button class="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition">
+          食事記録を始める
+        </button>
+      </section>
+
+    </main>
+
+    <!-- フッター -->
+    <footer class="bg-gray-800 text-gray-400 py-6 px-4 mt-8">
+      <div class="max-w-4xl mx-auto text-center">
+        <p class="text-sm">© 2024 Nutrition Dashboard. All rights reserved.</p>
+      </div>
+    </footer>
+
+  </div>
 
   <script>
     // GASから埋め込まれた変数を使用する
-    // Gitには "<?= LIFF_ID ?>" とだけ記録される
     const MY_LIFF_ID = "<?= LIFF_ID ?>";
-    const GAS_URL = "<?= GAS_URL ?>"; 
+    const GAS_URL = "<?= GAS_URL ?>";
 
+    // グローバル変数
+    let pfcChartInstance = null;
+    let weeklyChartInstance = null;
+
+    // LIFF初期化
     async function initLiff() {
       try {
         await liff.init({ liffId: MY_LIFF_ID });
@@ -27,10 +207,8 @@
           return;
         }
 
-        // ローディング表示など...
         const accessToken = liff.getAccessToken();
         
-        // POST通信でトークンを送信
         const response = await fetch(GAS_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -40,15 +218,221 @@
         const data = await response.json();
         if (data.error) throw new Error(data.error);
 
-        // データ描画処理 (既存の renderDashboard などを呼び出す)
+        // ローディングを隠してメインコンテンツを表示
+        document.getElementById('loading-view').classList.add('hidden');
+        document.getElementById('main-content').classList.remove('hidden');
+
+        // ダッシュボードを描画
         renderDashboard(data);
 
       } catch (err) {
         console.error("LIFF error:", err);
-        // エラー表示処理...
+        document.getElementById('loading-view').classList.add('hidden');
+        document.getElementById('error-view').classList.remove('hidden');
+        document.getElementById('error-message').textContent = err.message;
       }
     }
 
+    // ダッシュボード描画
+    function renderDashboard(data) {
+      const { user, ideal, stats, daily, summary } = data;
+
+      // ユーザー情報の表示
+      document.getElementById('user-name').textContent = user.name;
+      if (user.isPremium) {
+        document.getElementById('premium-badge').classList.remove('hidden');
+        document.getElementById('ai-advice-section').classList.remove('hidden');
+      }
+
+      // サマリーの表示
+      document.getElementById('score-value').textContent = `${summary.score} / 100`;
+      document.getElementById('score-text').textContent = getScoreText(summary.score);
+      document.getElementById('success-days').textContent = `${summary.successDays} / 7日`;
+      document.getElementById('avg-calories').textContent = `${stats.avgCalories} kcal`;
+      document.getElementById('target-calories').textContent = `目標: ${ideal.calories} kcal`;
+
+      // PFCチャートの描画
+      renderPFCChart(ideal, stats);
+
+      // 週間推移チャートの描画
+      renderWeeklyChart(daily, ideal);
+
+      // 栄養詳細の表示
+      renderNutritionDetails(ideal, stats);
+
+      // 不足栄養素の表示
+      renderDeficiencies(summary.deficiencies);
+
+      // 食事記録がない場合の表示
+      const hasRecords = daily.some(d => d.calories > 0);
+      if (!hasRecords) {
+        document.getElementById('no-records').classList.remove('hidden');
+      }
+    }
+
+    // スコアテキストの取得
+    function getScoreText(score) {
+      if (score >= 90) return "Excellent!";
+      if (score >= 80) return "Good!";
+      if (score >= 70) return "Fair";
+      return "Needs Improvement";
+    }
+
+    // PFCチャートの描画
+    function renderPFCChart(ideal, stats) {
+      const ctx = document.getElementById('pfc-chart').getContext('2d');
+      
+      if (pfcChartInstance) {
+        pfcChartInstance.destroy();
+      }
+
+      pfcChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: ['たんぱく質', '脂質', '炭水化物'],
+          datasets: [
+            {
+              label: '理想',
+              data: [ideal.protein, ideal.fat, ideal.carbs],
+              backgroundColor: 'rgba(59, 130, 246, 0.5)',
+              borderColor: 'rgb(59, 130, 246)',
+              borderWidth: 2
+            },
+            {
+              label: '過去7日間平均',
+              data: [stats.avgProtein, stats.avgFat, stats.avgCarbs],
+              backgroundColor: 'rgba(16, 185, 129, 0.5)',
+              borderColor: 'rgb(16, 185, 129)',
+              borderWidth: 2
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          scales: {
+            y: {
+              beginAtZero: true,
+              title: {
+                display: true,
+                text: 'g'
+              }
+            }
+          }
+        }
+      });
+    }
+
+    // 週間推移チャートの描画
+    function renderWeeklyChart(daily, ideal) {
+      const ctx = document.getElementById('weekly-chart').getContext('2d');
+      
+      if (weeklyChartInstance) {
+        weeklyChartInstance.destroy();
+      }
+
+      const labels = daily.map(d => d.label);
+      const calories = daily.map(d => d.calories);
+
+      weeklyChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [
+            {
+              label: '摂取カロリー',
+              data: calories,
+              borderColor: 'rgb(249, 115, 22)',
+              backgroundColor: 'rgba(249, 115, 22, 0.1)',
+              fill: true,
+              tension: 0.4
+            },
+            {
+              label: '目標',
+              data: Array(7).fill(ideal.calories),
+              borderColor: 'rgb(59, 130, 246)',
+              borderDash: [5, 5],
+              fill: false,
+              tension: 0
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: true,
+          scales: {
+            y: {
+              beginAtZero: false,
+              title: {
+                display: true,
+                text: 'kcal'
+              }
+            }
+          }
+        }
+      });
+    }
+
+    // 栄養詳細の表示
+    function renderNutritionDetails(ideal, stats) {
+      const container = document.getElementById('nutrition-details');
+      const nutrients = [
+        { key: 'protein', label: 'たんぱく質', unit: 'g', ideal: ideal.protein, actual: stats.avgProtein },
+        { key: 'fat', label: '脂質', unit: 'g', ideal: ideal.fat, actual: stats.avgFat },
+        { key: 'carbs', label: '炭水化物', unit: 'g', ideal: ideal.carbs, actual: stats.avgCarbs },
+        { key: 'fiber', label: '食物繊維', unit: 'g', ideal: ideal.fiber, actual: stats.avgFiber },
+        { key: 'iron', label: '鉄分', unit: 'mg', ideal: ideal.iron, actual: stats.avgIron },
+        { key: 'zinc', label: '亜鉛', unit: 'mg', ideal: ideal.zinc, actual: stats.avgZinc },
+        { key: 'magnesium', label: 'マグネシウム', unit: 'mg', ideal: ideal.magnesium, actual: stats.avgMagnesium }
+      ];
+
+      container.innerHTML = nutrients.map(nutrient => {
+        const percentage = Math.min((nutrient.actual / nutrient.ideal) * 100, 100);
+        const barColor = percentage >= 90 ? 'bg-green-500' : percentage >= 70 ? 'bg-yellow-500' : 'bg-red-500';
+        
+        return `
+          <div>
+            <div class="flex justify-between text-sm mb-1">
+              <span class="text-gray-700">${nutrient.label}</span>
+              <span class="text-gray-600">${nutrient.actual} / ${nutrient.ideal} ${nutrient.unit}</span>
+            </div>
+            <div class="w-full bg-gray-200 rounded-full h-2">
+              <div class="${barColor} h-2 rounded-full transition-all" style="width: ${percentage}%"></div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // 不足栄養素の表示
+    function renderDeficiencies(deficiencies) {
+      const container = document.getElementById('deficiencies-list');
+      
+      if (deficiencies.length === 0) {
+        container.innerHTML = `
+          <div class="text-center py-4 text-green-600">
+            <p class="font-bold">✨ 栄養バランスは良好です！</p>
+            <p class="text-sm">すべての栄養素が目標を達成しています</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = deficiencies.map(def => `
+        <div class="flex items-center justify-between p-4 bg-red-50 rounded-lg">
+          <div>
+            <p class="font-bold ${def.color}">${def.name}</p>
+            <p class="text-sm text-gray-600">不足: ${def.diff}</p>
+          </div>
+          <div class="text-right">
+            <p class="text-sm text-gray-500">推奨食品</p>
+            <p class="text-sm font-medium text-gray-700">${def.food}</p>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // ページ読み込み時に実行
     window.onload = initLiff;
   </script>
 </body>
