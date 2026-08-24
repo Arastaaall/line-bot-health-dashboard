@@ -170,7 +170,7 @@
     </div>
 
     <script>
-        // ️ 以下の2つを実際の値に置き換えてください
+        // 以下の2つを実際の値に置き換えてください
         let MY_LIFF_ID = "2011063084-sSBZXflI"; // あなたのLIFF ID
         const GAS_URL = "https://script.google.com/macros/s/AKfycbxEl3VIa628NdVq3psrRXQXZhDcIS7MfofpM4IvHa3gEUBx2Y3_Uu4lqpnPS7DRTNtC/exec"; // あなたのGAS URL
         
@@ -187,8 +187,8 @@
                     return;
                 }
 
-                const profile = await liff.getProfile();
-                fetchDashboardData(profile.userId);
+                // ダッシュボードデータの読み込みを実行
+                await loadDashboardData();
 
             } catch (err) {
                 console.error("LIFF error:", err);
@@ -205,19 +205,26 @@
             }
         }
 
-        async function fetchDashboardData(userId) {
+        async function loadDashboardData() {
             const loadingView = document.getElementById('loading-view');
             const emptyView = document.getElementById('empty-view');
             const dashboardView = document.getElementById('dashboard-view');
 
+            // 1. LIFF SDKからアクセストークンを取得
+            const accessToken = liff.getAccessToken();
+            if (!accessToken) {
+                console.error("アクセストークンが取得できません");
+                return;
+            }
+
             try {
-                const response = await fetch(`${GAS_URL}?userId=${userId}`, {
-                    method: 'GET',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
+                // 2. GASのWebアプリ(doPost)へPOSTリクエストを送信
+                // ※ Content-Type ヘッダーを指定しないことでプリフライト(OPTIONS)リクエストの発生を防止
+                const response = await fetch(GAS_URL, {
+                    method: 'POST',
+                    body: JSON.stringify({ token: accessToken })
                 });
-                
+
                 const data = await response.json();
 
                 if (data.error) {
@@ -235,6 +242,7 @@
 
                 dashboardView.classList.remove('hidden');
 
+                // ユーザー名およびプラン情報の反映
                 document.getElementById('userName').textContent = (data.user.name || "ユーザー") + " さん";
 
                 const planBadge = document.getElementById('planBadge');
@@ -250,11 +258,13 @@
                     aiAdviceSection.classList.add('hidden');
                 }
 
+                // サマリー表示の反映
                 document.getElementById('scoreVal').textContent = data.summary.score;
                 document.getElementById('successDays').textContent = data.summary.successDays;
                 document.getElementById('avgCal').textContent = data.stats.avgCalories.toLocaleString();
                 document.getElementById('targetCal').textContent = data.ideal.calories.toLocaleString();
 
+                // 各グラフおよびコンテンツの描画処理
                 renderPfcChart(data.stats, data.ideal);
                 renderRadarChart(data.stats, data.ideal);
                 renderPfcTrendChart(data.daily);
@@ -262,7 +272,7 @@
                 renderDeficiencies(data.summary.deficiencies);
 
             } catch (err) {
-                console.error(err);
+                console.error("Fetch Error:", err);
                 loadingView.innerHTML = `
                     <div class="text-center">
                         <div class="text-6xl mb-4">⚠️</div>
