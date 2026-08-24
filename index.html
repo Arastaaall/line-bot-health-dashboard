@@ -192,28 +192,49 @@
     // GASから埋め込まれた変数を使用する
     const GAS_URL = "https://script.google.com/macros/s/AKfycbxEl3VIa628NdVq3psrRXQXZhDcIS7MfofpM4IvHa3gEUBx2Y3_Uu4lqpnPS7DRTNtC/exec";
     
-    let MY_LIFF_ID = ""; // 実行時に GAS から取得する
-
-    // グローバル変数
+    let MY_LIFF_ID = "";
     let pfcChartInstance = null;
     let weeklyChartInstance = null;
 
-    // LIFF初期化
+    // 1. GASから設定を取得
+    async function loadConfig() {
+        try {
+        const configRes = await fetch(`${GAS_URL}?action=config`);
+        if (!configRes.ok) {
+            throw new Error(`設定取得エラー: ${configRes.status}`);
+        }
+        const config = await configRes.json();
+        MY_LIFF_ID = config.LIFF_ID;
+        console.log("LIFF_IDを取得:", MY_LIFF_ID);
+        } catch (err) {
+        console.error("設定の取得に失敗:", err);
+        throw err;
+        }
+    }
+
+    // 2. LIFF初期化
     async function initLiff() {
-      try {
+        try {
+        // 設定を取得してからLIFFを初期化
+        await loadConfig();
+        
+        if (!MY_LIFF_ID) {
+            throw new Error("LIFF_IDが取得できませんでした");
+        }
+
         await liff.init({ liffId: MY_LIFF_ID });
 
         if (!liff.isLoggedIn()) {
-          liff.login({ redirectUri: window.location.href });
-          return;
+            liff.login({ redirectUri: window.location.href });
+            return;
         }
 
         const accessToken = liff.getAccessToken();
         
         const response = await fetch(GAS_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({ token: accessToken })
+            method: 'POST',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({ token: accessToken })
         });
 
         const data = await response.json();
@@ -223,15 +244,14 @@
         document.getElementById('loading-view').classList.add('hidden');
         document.getElementById('main-content').classList.remove('hidden');
 
-        // ダッシュボードを描画
         renderDashboard(data);
 
-      } catch (err) {
+        } catch (err) {
         console.error("LIFF error:", err);
         document.getElementById('loading-view').classList.add('hidden');
         document.getElementById('error-view').classList.remove('hidden');
         document.getElementById('error-message').textContent = err.message;
-      }
+        }
     }
 
     // ダッシュボード描画

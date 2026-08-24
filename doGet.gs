@@ -2,29 +2,26 @@
 // WebアプリのHTML配信 (doGet) - テンプレート版
 // ==========================================
 function doGet(e) {
-
-  // action=config の場合、スクリプトプロパティから LIFF_ID を返す
+  // ★ 追加: action=configの場合はJSON設定を返す
   if (e.parameter.action === 'config') {
     const props = PropertiesService.getScriptProperties();
     return ContentService.createTextOutput(JSON.stringify({
       LIFF_ID: props.getProperty('LIFF_ID')
     })).setMimeType(ContentService.MimeType.JSON);
   }
+
+  // 通常のHTML配信（既存のまま）
   const template = HtmlService.createTemplateFromFile('index');
   const props = PropertiesService.getScriptProperties();
-  
-  // スクリプトプロパティから値を取得
   const liffId = props.getProperty('LIFF_ID');
   const gasUrl = ScriptApp.getService().getUrl();
-  
-  // デバッグ用ログ
+
   Logger.log("LIFF_ID: " + liffId);
   Logger.log("GAS_URL: " + gasUrl);
-  
-  // テンプレート変数に値を割り当て
+
   template.LIFF_ID = liffId;
   template.GAS_URL = gasUrl;
-  
+
   return template.evaluate()
     .setTitle('栄養管理ダッシュボード')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
