@@ -59,7 +59,7 @@ function App() {
         {loading ? '取得中...' : 'GASからダッシュボードデータを取得'}
       </button>
       {error && <p className="mt-4 text-rose-600 text-sm">エラー: {error}</p>}
-      {data && (
+      {data !== null && (
         <pre className="mt-4 p-4 bg-white rounded text-xs overflow-auto max-h-[70vh]">
           {JSON.stringify(data, null, 2)}
         </pre>
