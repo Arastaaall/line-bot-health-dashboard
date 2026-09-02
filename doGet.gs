@@ -24,6 +24,7 @@ function doPost(e) {
 
   const token = req.token;
   const action = req.action || '';
+  const params = req.params || {};
   const isLegacy = (action === '');
 
   if (!token) {

@@ -4,6 +4,9 @@ import { initLiff, isLoggedIn, login } from './services/liff';
 import AppLayout from './layouts/AppLayout';
 import Dashboard from './pages/Dashboard';
 import TrainingHome from './pages/training/TrainingHome';
+import LogForm from './pages/training/LogForm';
+import MenuManager from './pages/training/MenuManager';
+import LogHistory from './pages/training/LogHistory';
 
 function App() {
   const [ready, setReady] = useState(false);
@@ -33,6 +36,9 @@ function App() {
         <Route element={<AppLayout />}>
           <Route path="/" element={<Dashboard />} />
           <Route path="/training" element={<TrainingHome />} />
+          <Route path="/training/log" element={<LogForm />} />
+          <Route path="/training/menus" element={<MenuManager />} />
+          <Route path="/training/history" element={<LogHistory />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
