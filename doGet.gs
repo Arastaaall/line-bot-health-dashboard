@@ -1,54 +1,19 @@
-// ==========================================
-// 栄養管理ダッシュボード GAS API
-// 構成メモ(将来のファイル分割用):
-//   utils / auth / main / api_dashboard
-// ==========================================
+// main.gs — doGet / doPost（dispatchのみ）
+// ヘルパー類は utils.gs / auth.gs へ移動済み
 
-// ---------- utils ----------
-function jsonResponse_(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-function ok_(data) { return jsonResponse_({ ok: true, data: data }); }
-function fail_(code, message) {
-  return jsonResponse_({ ok: false, error: { code: code, message: message } });
-}
-function legacyError_(message) { return jsonResponse_({ error: message }); }
-
-// ---------- auth ----------
-function verifyLineToken(token) {
-  try {
-    const res = UrlFetchApp.fetch('https://api.line.me/v2/profile', {
-      method: 'get',
-      headers: { 'Authorization': 'Bearer ' + token },
-      muteHttpExceptions: true
-    });
-    if (res.getResponseCode() !== 200) return null;
-    return JSON.parse(res.getContentText()).userId;
-  } catch (err) {
-    return null;
-  }
-}
-
-// ---------- main: doGet ----------
 function doGet(e) {
   const action = (e && e.parameter) ? e.parameter.action : '';
-
-  if (action === 'health') {
-    return ok_({ status: 'ok', time: new Date().toISOString() });
-  }
+  if (action === 'health') return ok_({ status: 'ok', time: new Date().toISOString() });
   if (action === 'config') {
     const props = PropertiesService.getScriptProperties();
     return jsonResponse_({ LIFF_ID: props.getProperty('LIFF_ID') });
   }
-  // レガシー: 旧index.html用HTML配信
   return HtmlService.createHtmlOutputFromFile('index')
     .setTitle('栄養管理ダッシュボード')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
-// ---------- main: doPost (action dispatcher) ----------
 function doPost(e) {
   let req;
   try {
@@ -62,49 +27,42 @@ function doPost(e) {
   const isLegacy = (action === '');
 
   if (!token) {
-    return isLegacy ? legacyError_('Token is required')
-                    : fail_('AUTH_FAILED', 'Token is required');
+    return isLegacy ? legacyError_('Token is required') : fail_('AUTH_FAILED', 'Token is required');
   }
 
-  const userId = verifyLineToken(token);
+  const userId = checkAuth(token); // 認証キャッシュ経由
   if (!userId) {
-    return isLegacy ? legacyError_('Invalid token or LINE API error')
-                    : fail_('AUTH_FAILED', 'Invalid token or LINE API error');
+    return isLegacy ? legacyError_('Invalid token or LINE API error') : fail_('AUTH_FAILED', 'Invalid token or LINE API error');
   }
 
   try {
     switch (action) {
       case '':
-        // 旧index.html互換: 旧形式のまま返す
         return jsonResponse_(buildDashboardData(userId));
       case 'getDashboardData':
         return ok_(getDashboardDataCached(userId));
+      // Phase 1 action は次ステップで追加
       default:
         return fail_('NOT_FOUND', 'Unknown action: ' + action);
     }
   } catch (err) {
-    return isLegacy ? legacyError_('Server error: ' + err.toString())
-                    : fail_('SERVER_ERROR', err.toString());
+    return isLegacy ? legacyError_('Server error: ' + err.toString()) : fail_('SERVER_ERROR', err.toString());
   }
 }
 
-// ---------- api_dashboard: キャッシュ ----------
+// ---------- ダッシュボード（将来 api_dashboard.gs へ分離予定） ----------
 function getDashboardDataCached(userId) {
   const cache = CacheService.getUserCache();
   const key = 'dashboard_' + userId;
   const cached = cache.get(key);
   if (cached) return JSON.parse(cached);
-
   const data = buildDashboardData(userId);
   try { cache.put(key, JSON.stringify(data), 60); } catch (err) {}
   return data;
 }
 
-// ---------- api_dashboard: 本体(純粋なデータを返す) ----------
 function buildDashboardData(userId) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-
-  // --- usersシート ---
   const usersSheet = ss.getSheetByName('users');
   const usersData = usersSheet.getDataRange().getValues();
   const userHeader = usersData[0];
@@ -116,12 +74,11 @@ function buildDashboardData(userId) {
       userData.name = usersData[i][getIdx('User_Name')] || usersData[i][getIdx('user_name')] || 'ユーザー';
       userData.targetCalories = Number(usersData[i][getIdx('target_calories')]) || 2000;
       userData.targetWeight = Number(usersData[i][getIdx('target_weight')]) || 60;
-      userData.isPremium = Boolean(usersData[i][getIdx('is_premium')]);
+      userData.isPremium = toBool_(usersData[i][getIdx('is_premium')]);
       break;
     }
   }
 
-  // --- 理想目標値 ---
   const idealCal = userData.targetCalories || userData.tdee;
   const ideal = {
     calories: idealCal,
@@ -131,7 +88,6 @@ function buildDashboardData(userId) {
     fiber: 20, vitamins: 100, zinc: 10, magnesium: 320, sodium: 8, iron: 7.5
   };
 
-  // --- logsシート過去7日 ---
   const logsSheet = ss.getSheetByName('logs');
   const logsData = logsSheet.getDataRange().getValues();
   const logHeader = logsData[0];
@@ -142,7 +98,7 @@ function buildDashboardData(userId) {
   for (let i = 6; i >= 0; i--) {
     const d = new Date();
     d.setDate(today.getDate() - i);
-    const dateKey = Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    const dateKey = dateKeyOf_(d);
     const label = (d.getMonth() + 1) + '/' + d.getDate() + '(' + ['日','月','火','水','木','金','土'][d.getDay()] + ')';
     daysMap[dateKey] = { date: dateKey, label: label, calories: 0, protein: 0, fat: 0, carbs: 0 };
   }
@@ -155,7 +111,7 @@ function buildDashboardData(userId) {
     if (row[getLogIdx('user_id')] === userId) {
       const rawDate = new Date(row[getLogIdx('timestamp')]);
       if (!isNaN(rawDate)) {
-        const dateKey = Utilities.formatDate(rawDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+        const dateKey = dateKeyOf_(rawDate);
         if (daysMap[dateKey]) {
           const c = Number(row[getLogIdx('calories')]) || 0;
           const p = Number(row[getLogIdx('protein')]) || 0;
