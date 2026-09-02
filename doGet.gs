@@ -43,7 +43,7 @@ function doPost(e) {
         return ok_(getDashboardDataCached(userId));
       // Phase 1 action は次ステップで追加
       default:
-        return fail_('NOT_FOUND', 'Unknown action: ' + action);
+        return jsonResponse_(dispatchTraining(userId, action, params));
     }
   } catch (err) {
     return isLegacy ? legacyError_('Server error: ' + err.toString()) : fail_('SERVER_ERROR', err.toString());

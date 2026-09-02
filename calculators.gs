@@ -77,12 +77,11 @@ function calculateCardioCalories(p) {
   if (p.duration_min) {
     hours = p.duration_min / 60;
     if (p.distance_km && kind) {
-      met = adjustMetBySpeed(kind, p.distance_km / hours, met);
+      met = adjustMetBySpeed(kind, p.distance_km / hours, met); // ←速度補正（必須）
     }
   } else if (p.distance_km && kind) {
     const assumed = ASSUMED_SPEED_KMH[kind];
     hours = p.distance_km / assumed;
-    met = adjustMetBySpeed(kind, assumed, met);
     method = 'MET_standard_speed';
   } else {
     return { calories: 0, met: met, hours: 0, method: method };
@@ -91,7 +90,6 @@ function calculateCardioCalories(p) {
   const raw = 1.05 * met * p.body_weight * hours;
   return { calories: clampCalories_(raw), met: met, hours: hours, method: method };
 }
-
 // 筋トレ/サーキット。時間 = work×sets + rest×(sets-1)
 function calculateStrengthCalories(p) {
   const sets = p.sets || [];
