@@ -183,6 +183,7 @@ function apiCreateTrainingMenu(userId, params) {
       menu_id: makeId_('tmu'),
       user_id: userId,
       master_id: masterId,
+      training_group: String(params.training_group || 'その他'),
       menu_name: name,
       training_type: trainingType,
       input_profile: inputProfile,
@@ -208,6 +209,7 @@ function apiUpdateTrainingMenu(userId, params) {
     const patch = { updated_at: nowIso_() };
     if (params.display_order !== undefined && params.display_order !== null) patch['display_order'] = toNumber_(params.display_order, 0);
     if (params.menu_name) patch['menu_name'] = String(params.menu_name).trim();
+    if (params.training_group !== undefined) patch['training_group'] = String(params.training_group || 'その他');
     updateRowById('Training_Menus', 'menu_id', params.menu_id, patch);
     invalidateMenuCaches_(userId);
     return { ok: true, data: { menu_id: params.menu_id } };

@@ -110,8 +110,15 @@ export default function LogForm() {
         {menus.length > 0 && (
           <select value={menuId} onChange={(e) => setMenuId(e.target.value)} className="w-full border rounded p-2 text-sm">
             <option value="">— マイメニューを使わない —</option>
-            {menus.map((m) => <option key={m.menu_id} value={m.menu_id}>{m.menu_name}</option>)}
-          </select>
+                {menus.map((m) => {
+                const g = String(m.training_group || 'その他');
+                return (
+                    <option key={m.menu_id} value={m.menu_id}>
+                    {g !== 'その他' ? `【${g}】` : ''}{m.menu_name}
+                    </option>
+                );
+                })}
+        </select>
         )}
         {!selectedMenu && <ExercisePicker masters={masters} onPick={setPicked} />}
         {!selectedMenu && !picked.master && picked.freeName !== '' && (
