@@ -1,4 +1,4 @@
-// api_training.gs — Phase 1 トレーニングAPI群
+// api_training.gs — Phase 1 トレーニングAPI群（キャッシュ+冪等版）
 
 // ---------- 共通ヘルパー ----------
 function getUserRecord_(userId) {
@@ -27,6 +27,35 @@ function withLock_(fn) {
   }
 }
 
+function cached_(key, ttl, fn) {
+  const c = CacheService.getUserCache();
+  const hit = c.get(key);
+  if (hit) return JSON.parse(hit);
+  const data = fn();
+  try { c.put(key, JSON.stringify(data), ttl); } catch (e) {}
+  return data;
+}
+
+function invalidateLogCaches_(userId) {
+  const c = CacheService.getUserCache();
+  c.remove('tlogs_' + userId);
+  c.remove('summary_' + userId + '_' + todayKey_());
+}
+function invalidateMenuCaches_(userId) {
+  CacheService.getUserCache().remove('menus_' + userId);
+}
+
+// 冪等性: 同じclient_idの再送は2度書かない
+function dedupCheck_(clientId) {
+  if (!clientId) return null;
+  const hit = CacheService.getUserCache().get('dedup_' + clientId);
+  return hit ? JSON.parse(hit) : null;
+}
+function dedupSave_(clientId, payload) {
+  if (!clientId) return;
+  try { CacheService.getUserCache().put('dedup_' + clientId, JSON.stringify(payload), 600); } catch (e) {}
+}
+
 function getMasterDefaults_(masterId) {
   if (!masterId) return null;
   const m = findById('Training_Master', 'master_id', masterId);
@@ -46,64 +75,84 @@ function deriveInputProfile_(master) {
   return master.is_bodyweight ? 'strength_basic' : 'strength_advanced';
 }
 
-function getSetsOfLog_(logId) {
-  return getRows('Training_Sets', function (s) { return String(s['training_log_id']) === String(logId); })
-    .sort(function (a, b) { return (Number(a['set_no']) || 0) - (Number(b['set_no']) || 0); });
-}
-
 function cellNum_(v) {
   const n = toNumber_(v, null);
   return n === null ? '' : n;
 }
 
-// ---------- Read系 ----------
+// ---------- Read系（キャッシュ付き） ----------
 function apiGetTrainingMaster(userId, params) {
-  const rows = getRows('Training_Master', function (r) { return toBool_(r['is_active']); });
+  const rows = cached_('master_all_v1', 3600, function () {
+    return getRows('Training_Master', function (r) { return toBool_(r['is_active']); });
+  });
   return { ok: true, data: { exercises: rows } };
 }
 
 function apiGetTrainingMenus(userId, params) {
   const user = getUserRecord_(userId);
-  const menus = getRows('Training_Menus', function (r) {
-    return String(r['user_id']) === String(userId) && toBool_(r['is_active']);
-  }).sort(function (a, b) { return (Number(a['display_order']) || 0) - (Number(b['display_order']) || 0); });
+  const menus = cached_('menus_' + userId, 600, function () {
+    return getRows('Training_Menus', function (r) {
+      return String(r['user_id']) === String(userId) && toBool_(r['is_active']);
+    }).sort(function (a, b) { return (Number(a['display_order']) || 0) - (Number(b['display_order']) || 0); });
+  });
   return { ok: true, data: { menus: menus, limit: user.isPremium ? null : 5 } };
 }
 
 function apiGetTrainingLogs(userId, params) {
   const user = getUserRecord_(userId);
+  const all = cached_('tlogs_' + userId, 60, function () {
+    const logs = getRows('Training_Logs', function (r) { return String(r['user_id']) === String(userId); });
+    const setsAll = getRows('Training_Sets');
+    const byLog = {};
+    setsAll.forEach(function (s) {
+      const k = String(s['training_log_id']);
+      (byLog[k] = byLog[k] || []).push(s);
+    });
+    logs.forEach(function (l) {
+      l.sets = (byLog[String(l['training_log_id'])] || []).sort(function (a, b) { return (Number(a['set_no']) || 0) - (Number(b['set_no']) || 0); });
+    });
+    return logs.sort(function (a, b) { return new Date(b['training_date']) - new Date(a['training_date']); });
+  });
+
   let from, to;
   const d7 = new Date();
   d7.setDate(d7.getDate() - 6);
   if (!user.isPremium) {
-    from = dateKeyOf_(d7);           // 無料は直近7日に強制
+    from = dateKeyOf_(d7);
     to = todayKey_();
   } else {
     from = params.from || dateKeyOf_(d7);
     to = params.to || todayKey_();
   }
-  const logs = getRows('Training_Logs', function (r) {
-    if (String(r['user_id']) !== String(userId)) return false;
-    const key = dateKeyOf_(new Date(r['training_date']));
-    return key >= from && key <= to;
-  }).sort(function (a, b) { return new Date(b['training_date']) - new Date(a['training_date']); });
-
-  const setsAll = getRows('Training_Sets');
-  const byLog = {};
-  setsAll.forEach(function (s) {
-    const k = String(s['training_log_id']);
-    (byLog[k] = byLog[k] || []).push(s);
+  const filtered = all.filter(function (l) {
+    const k = dateKeyOf_(new Date(l['training_date']));
+    return k >= from && k <= to;
   });
-  logs.forEach(function (l) {
-    l.sets = (byLog[String(l['training_log_id'])] || []).sort(function (a, b) { return (Number(a['set_no']) || 0) - (Number(b['set_no']) || 0); });
-  });
+  return { ok: true, data: { logs: filtered, from: from, to: to, range_restricted: !user.isPremium } };
+}
 
-  return { ok: true, data: { logs: logs, from: from, to: to, range_restricted: !user.isPremium } };
+// ---------- 統合action（呼び出し回数半減用） ----------
+function apiGetDashboardAll(userId, params) {
+  return {
+    ok: true,
+    data: {
+      summary: apiGetDailyCalorieSummary(userId, params).data,
+      dashboard: getDashboardDataCached(userId)
+    }
+  };
+}
+function apiGetTrainingFormInit(userId, params) {
+  const menus = apiGetTrainingMenus(userId, params).data;
+  const master = apiGetTrainingMaster(userId, params).data;
+  return { ok: true, data: { menus: menus.menus, limit: menus.limit, exercises: master.exercises } };
 }
 
 // ---------- Write系 ----------
 function apiCreateTrainingMenu(userId, params) {
   return withLock_(function () {
+    const dup = dedupCheck_(params.client_id);
+    if (dup) return dup;
+
     const user = getUserRecord_(userId);
     if (!user.isPremium) {
       const count = getRows('Training_Menus', function (r) {
@@ -143,7 +192,10 @@ function apiCreateTrainingMenu(userId, params) {
       updated_at: now
     };
     appendRowObj('Training_Menus', menu);
-    return { ok: true, data: { menu_id: menu.menu_id } };
+    invalidateMenuCaches_(userId);
+    const res = { ok: true, data: { menu_id: menu.menu_id } };
+    dedupSave_(params.client_id, res);
+    return res;
   });
 }
 
@@ -157,6 +209,7 @@ function apiUpdateTrainingMenu(userId, params) {
     if (params.display_order !== undefined && params.display_order !== null) patch['display_order'] = toNumber_(params.display_order, 0);
     if (params.menu_name) patch['menu_name'] = String(params.menu_name).trim();
     updateRowById('Training_Menus', 'menu_id', params.menu_id, patch);
+    invalidateMenuCaches_(userId);
     return { ok: true, data: { menu_id: params.menu_id } };
   });
 }
@@ -168,16 +221,19 @@ function apiDeleteTrainingMenu(userId, params) {
       return { ok: false, error: { code: 'NOT_FOUND', message: 'メニューが見つかりません' } };
     }
     updateRowById('Training_Menus', 'menu_id', params.menu_id, { is_active: false, updated_at: nowIso_() });
+    invalidateMenuCaches_(userId);
     return { ok: true, data: { menu_id: params.menu_id } };
   });
 }
 
 function apiCreateTrainingLog(userId, params) {
   return withLock_(function () {
+    const dup = dedupCheck_(params.client_id);
+    if (dup) return dup;
+
     const user = getUserRecord_(userId);
     const dateKey = params.training_date ? dateKeyOf_(new Date(params.training_date)) : todayKey_();
 
-    // 無料: 1日7件
     if (!user.isPremium) {
       const count = getRows('Training_Logs', function (r) {
         return String(r['user_id']) === String(userId) && dateKeyOf_(new Date(r['training_date'])) === dateKey;
@@ -188,7 +244,6 @@ function apiCreateTrainingLog(userId, params) {
     const errors = validateTrainingLogBase_(params).concat(validateSets_(params.sets));
     if (errors.length) return { ok: false, error: { code: 'VALIDATION_ERROR', message: errors.join(' / ') } };
 
-    // 名称・マスター解決
     let masterId = params.master_id || '';
     let exerciseName = String(params.exercise_name || '').trim();
     if (params.menu_id) {
@@ -212,7 +267,7 @@ function apiCreateTrainingLog(userId, params) {
     if (!exerciseName) return { ok: false, error: { code: 'VALIDATION_ERROR', message: 'exercise_nameは必須です' } };
 
     const rpeResolved = resolveRpe_(params);
-    const bodyWeight = user.weight !== null ? user.weight : 60; // 登録時の体重をスナップショット
+    const bodyWeight = user.weight !== null ? user.weight : 60;
 
     let calc;
     if (params.training_type === 'cardio') {
@@ -275,13 +330,16 @@ function apiCreateTrainingLog(userId, params) {
       });
     });
 
-    return { ok: true, data: {
+    invalidateLogCaches_(userId);
+    const res = { ok: true, data: {
       training_log_id: logId,
       estimated_calories: calc.calories,
       calorie_estimation_method: calc.method,
       calorie_formula_version: FORMULA_VERSION,
       body_weight: bodyWeight
     } };
+    dedupSave_(params.client_id, res);
+    return res;
   });
 }
 
@@ -309,7 +367,6 @@ function apiUpdateTrainingLog(userId, params) {
       sets = params.sets;
     }
 
-    // 再計算: 必ず保存済みのbody_weightを使う（現在体重は使わない）
     const bodyWeight = toNumber_(log['body_weight'], 60);
     const merged = Object.assign({}, log, patch);
     const master = getMasterDefaults_(String(log['master_id'] || ''));
@@ -324,7 +381,7 @@ function apiUpdateTrainingLog(userId, params) {
         body_weight: bodyWeight
       });
     } else {
-      const useSets = sets !== null ? sets : getSetsOfLog_(params.training_log_id);
+      const useSets = sets !== null ? sets : (log.sets || []);
       calc = calculateStrengthCalories({
         sets: useSets,
         body_weight: bodyWeight,
@@ -339,7 +396,6 @@ function apiUpdateTrainingLog(userId, params) {
 
     updateRowById('Training_Logs', 'training_log_id', params.training_log_id, patch);
 
-    // setsは置換方式（追記しない）
     if (sets !== null) {
       deleteRowsByForeignKey('Training_Sets', 'training_log_id', params.training_log_id);
       const now = nowIso_();
@@ -362,6 +418,7 @@ function apiUpdateTrainingLog(userId, params) {
       });
     }
 
+    invalidateLogCaches_(userId);
     return { ok: true, data: {
       training_log_id: params.training_log_id,
       estimated_calories: calc.calories,
@@ -376,9 +433,9 @@ function apiDeleteTrainingLog(userId, params) {
     if (!log || String(log['user_id']) !== String(userId)) {
       return { ok: false, error: { code: 'NOT_FOUND', message: 'ログが見つかりません' } };
     }
-    // カスケード削除: Sets → Logs の順
     deleteRowsByForeignKey('Training_Sets', 'training_log_id', params.training_log_id);
     deleteRowById('Training_Logs', 'training_log_id', params.training_log_id);
+    invalidateLogCaches_(userId);
     return { ok: true, data: { deleted: true } };
   });
 }
@@ -396,6 +453,8 @@ function dispatchTraining(userId, action, params) {
     case 'updateTrainingLog': return apiUpdateTrainingLog(userId, params);
     case 'deleteTrainingLog': return apiDeleteTrainingLog(userId, params);
     case 'getDailyCalorieSummary': return apiGetDailyCalorieSummary(userId, params);
+    case 'getDashboardAll': return apiGetDashboardAll(userId, params);
+    case 'getTrainingFormInit': return apiGetTrainingFormInit(userId, params);
     default: return { ok: false, error: { code: 'NOT_FOUND', message: 'Unknown action: ' + action } };
   }
 }

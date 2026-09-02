@@ -10,7 +10,24 @@ export class ApiError extends Error {
   }
 }
 
-// GASリファクタ後は新形式 {ok, data}、完了前は旧形式(生JSON)の両対応
+async function fetchWithRetry(body: string): Promise<Response> {
+  const init: RequestInit = {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body,
+  };
+  try {
+    return await fetch(GAS_URL, init);
+  } catch (e) {
+    await new Promise((r) => setTimeout(r, 800));
+    try {
+      return await fetch(GAS_URL, init);
+    } catch (e2) {
+      throw new ApiError('NETWORK', '通信に失敗しました。一時的なエラーの可能性があります。履歴を確認してから再操作してください。');
+    }
+  }
+}
+
 export async function callApi<T = unknown>(
   action: string,
   params: Record<string, unknown> = {},
@@ -18,20 +35,17 @@ export async function callApi<T = unknown>(
   const token = getAccessToken();
   if (!token) throw new ApiError('AUTH_FAILED', 'LINEトークン未取得です。再ログインしてください');
 
-  const res = await fetch(GAS_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ token, action, params }),
-  });
+  const res = await fetchWithRetry(JSON.stringify({ token, action, params }));
 
-  if (!res.ok) throw new ApiError('SERVER_ERROR', `HTTP ${res.status}`);
+  if (!res.ok) {
+    throw new ApiError('NETWORK', `サーバー通信エラー (HTTP ${res.status})。操作は完了している可能性があります。履歴を確認してから再操作してください。`);
+  }
   const json = await res.json();
 
   if (json?.ok === true) return json.data as T;
   if (json?.ok === false) {
     throw new ApiError(json.error?.code ?? 'SERVER_ERROR', json.error?.message ?? '不明なエラー');
   }
-  // 旧形式（GASリファクタ前の暫定対応）
   if (json?.error) throw new ApiError('SERVER_ERROR', json.error);
   return json as T;
 }
