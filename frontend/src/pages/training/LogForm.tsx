@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { callApi } from '../../services/api';
+import ExercisePicker from '../../components/ExercisePicker';
+import type { PickedExercise } from '../../components/ExercisePicker';
 
 const RPE_LABELS = ['楽だった', '余裕あり', 'まあまあ', 'かなりきつい', '限界', '地獄'];
 
@@ -14,9 +16,10 @@ type SetRow = { weight_kg: string; reps: string; rpe: string; is_bodyweight: boo
 export default function LogForm() {
   const nav = useNavigate();
   const [menus, setMenus] = useState<any[]>([]);
+  const [masters, setMasters] = useState<any[]>([]);
   const [menuId, setMenuId] = useState('');
-  const [freeName, setFreeName] = useState('');
-  const [trainingType, setTrainingType] = useState('strength');
+  const [picked, setPicked] = useState<PickedExercise>({ master: null, freeName: '' });
+  const [manualType, setManualType] = useState('strength');
   const [mode, setMode] = useState<'beginner' | 'advanced'>('beginner');
   const [date, setDate] = useState(todayKey());
   const [duration, setDuration] = useState('');
@@ -29,14 +32,17 @@ export default function LogForm() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    callApi('getTrainingMenus')
-      .then((m: any) => setMenus(m.menus))
+    Promise.all([callApi('getTrainingMenus'), callApi('getTrainingMaster')])
+      .then(([m, g]: any[]) => { setMenus(m.menus); setMasters(g.exercises); })
       .catch((e: any) => setError(e.message));
   }, []);
 
   const selectedMenu = menus.find((m) => m.menu_id === menuId) || null;
-  const effectiveType: string = selectedMenu ? selectedMenu.training_type : trainingType;
+  const effectiveType: string = selectedMenu
+    ? selectedMenu.training_type
+    : picked.master ? picked.master.exercise_type : manualType;
   const isCardio = effectiveType === 'cardio';
+  const hasExercise = !!selectedMenu || !!picked.master || picked.freeName !== '';
 
   const addSet = () => setSets([...sets, { weight_kg: '', reps: '', rpe: '', is_bodyweight: false }]);
   const updateSet = (i: number, patch: Partial<SetRow>) => {
@@ -46,8 +52,13 @@ export default function LogForm() {
   };
 
   const submit = async () => {
-    setSaving(true);
     setError(null);
+    if (!hasExercise) { setError('種目を選択または入力してください'); return; }
+    if (!isCardio && mode === 'advanced') {
+      if (sets.length === 0) { setError('セットを追加してください（回数が分からなければ初心者モードで）'); return; }
+      if (sets.some((s) => !s.reps)) { setError('回数を入力してください（分からなければ初心者モードで）'); return; }
+    }
+    setSaving(true);
     try {
       const params: any = {
         training_date: date,
@@ -56,7 +67,8 @@ export default function LogForm() {
         distance_km: isCardio && distance !== '' ? Number(distance) : null,
       };
       if (selectedMenu) params.menu_id = selectedMenu.menu_id;
-      else params.exercise_name = freeName;
+      else if (picked.master) params.master_id = picked.master.master_id;
+      else params.exercise_name = picked.freeName;
 
       if (!isCardio && mode === 'advanced') {
         params.rpe = rpeNum === '' ? null : Number(rpeNum);
@@ -95,18 +107,18 @@ export default function LogForm() {
 
       <div className="bg-white rounded-xl p-4 space-y-2 shadow-sm">
         <p className="text-sm font-bold text-gray-600">種目</p>
-        <select value={menuId} onChange={(e) => setMenuId(e.target.value)} className="w-full border rounded p-2 text-sm">
-          <option value="">自由追加（直接入力）</option>
-          {menus.map((m) => <option key={m.menu_id} value={m.menu_id}>{m.menu_name}</option>)}
-        </select>
-        {!selectedMenu && (
-          <>
-            <input value={freeName} onChange={(e) => setFreeName(e.target.value)} placeholder="例: ベンチプレス / ランニング" className="w-full border rounded p-2 text-sm" />
-            <select value={trainingType} onChange={(e) => setTrainingType(e.target.value)} className="w-full border rounded p-2 text-sm">
-              <option value="strength">筋トレ</option>
-              <option value="cardio">有酸素</option>
-            </select>
-          </>
+        {menus.length > 0 && (
+          <select value={menuId} onChange={(e) => setMenuId(e.target.value)} className="w-full border rounded p-2 text-sm">
+            <option value="">— マイメニューを使わない —</option>
+            {menus.map((m) => <option key={m.menu_id} value={m.menu_id}>{m.menu_name}</option>)}
+          </select>
+        )}
+        {!selectedMenu && <ExercisePicker masters={masters} onPick={setPicked} />}
+        {!selectedMenu && !picked.master && picked.freeName !== '' && (
+          <select value={manualType} onChange={(e) => setManualType(e.target.value)} className="w-full border rounded p-2 text-sm">
+            <option value="strength">筋トレ</option>
+            <option value="cardio">有酸素</option>
+          </select>
         )}
       </div>
 
@@ -142,6 +154,7 @@ export default function LogForm() {
                 </div>
               ))}
               <button onClick={addSet} className="text-xs text-blue-600">＋ セット追加</button>
+              <p className="text-[10px] text-gray-400">自重はkg不要・回数のみでOK。回数が分からなければ初心者モードで。</p>
               <input type="number" value={rpeNum} onChange={(e) => setRpeNum(e.target.value)} placeholder="全体RPE（1-10・任意）" className="w-full border rounded p-2 text-sm" />
             </div>
           ) : (

@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react';
 import { callApi } from '../../services/api';
+import ExercisePicker from '../../components/ExercisePicker';
+import type { PickedExercise } from '../../components/ExercisePicker';
 
 export default function MenuManager() {
   const [menus, setMenus] = useState<any[]>([]);
   const [masters, setMasters] = useState<any[]>([]);
   const [limit, setLimit] = useState<number | null>(null);
+  const [picked, setPicked] = useState<PickedExercise>({ master: null, freeName: '' });
   const [name, setName] = useState('');
-  const [masterId, setMasterId] = useState('');
+  const [freeType, setFreeType] = useState('strength');
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
@@ -23,10 +26,15 @@ export default function MenuManager() {
 
   const add = async () => {
     setError(null); setInfo(null);
-    if (!name.trim()) { setError('メニュー名を入力してください'); return; }
+    const menuName = picked.master ? picked.master.exercise_name : name.trim();
+    if (!menuName) { setError('種目を選択するかメニュー名を入力してください'); return; }
     try {
-      await callApi('createTrainingMenu', { menu_name: name.trim(), master_id: masterId || undefined });
-      setName(''); setMasterId('');
+      const params: any = { menu_name: menuName };
+      if (picked.master) params.master_id = picked.master.master_id;
+      else params.training_type = freeType;
+      await callApi('createTrainingMenu', params);
+      setPicked({ master: null, freeName: '' });
+      setName('');
       setInfo('追加しました');
       load();
     } catch (e: any) { setError(e.message); }
@@ -75,11 +83,22 @@ export default function MenuManager() {
 
       <div className="bg-white rounded-xl p-4 space-y-2 shadow-sm">
         <p className="text-sm font-bold text-gray-600">メニュー追加</p>
-        <select value={masterId} onChange={(e) => setMasterId(e.target.value)} className="w-full border rounded p-2 text-sm">
-          <option value="">種目マスターから選ばない（自由追加）</option>
-          {masters.map((x) => <option key={x.master_id} value={x.master_id}>{x.exercise_name}</option>)}
-        </select>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="メニュー名（例: 朝のランニング）" className="w-full border rounded p-2 text-sm" />
+        <ExercisePicker
+          masters={masters}
+          onPick={(p) => {
+            setPicked(p);
+            if (!p.master && p.freeName) setName(p.freeName);
+          }}
+        />
+        {!picked.master && picked.freeName !== '' && (
+          <>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="メニュー名（編集可）" className="w-full border rounded p-2 text-sm" />
+            <select value={freeType} onChange={(e) => setFreeType(e.target.value)} className="w-full border rounded p-2 text-sm">
+              <option value="strength">筋トレ</option>
+              <option value="cardio">有酸素</option>
+            </select>
+          </>
+        )}
         {limit !== null && menus.length >= limit && (
           <p className="text-xs text-amber-600">無料枠（5件）が上限です。削除するかPROで無制限に。</p>
         )}
