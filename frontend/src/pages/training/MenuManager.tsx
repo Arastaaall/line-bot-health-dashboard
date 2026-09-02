@@ -2,10 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { callApi } from '../../services/api';
 import ExercisePicker from '../../components/ExercisePicker';
 import type { PickedExercise } from '../../components/ExercisePicker';
+import NamePicker from '../../components/NamePicker';
+import Loading from '../../components/Loading';
 
 const OTHER = 'その他';
 
 export default function MenuManager() {
+  const [loading, setLoading] = useState(true);
   const [menus, setMenus] = useState<any[]>([]);
   const [masters, setMasters] = useState<any[]>([]);
   const [limit, setLimit] = useState<number | null>(null);
@@ -16,6 +19,7 @@ export default function MenuManager() {
   const [error, setError] = useState<string | null>(null);
   const [limitMsg, setLimitMsg] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
   const [clientId, setClientId] = useState(() => `${Date.now()}_${Math.random().toString(36).slice(2)}`);
 
   const load = () => {
@@ -25,7 +29,8 @@ export default function MenuManager() {
         setLimit(d.limit);
         setMasters(d.exercises);
       })
-      .catch((e: any) => setError(e.message));
+      .catch((e: any) => setError(e.message))
+      .finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, []);
 
@@ -43,7 +48,48 @@ export default function MenuManager() {
     return keys.map((k) => ({ key: k, items: map.get(k)! }));
   }, [menus]);
 
-  const allGroupNames = useMemo(() => groups.map((g) => g.key), [groups]);
+  const persistOrder = async (newFlat: any[]) => {
+    const orders: any[] = [];
+    const gmap = new Map<string, any[]>();
+    newFlat.forEach((m) => {
+      const g = groupOf(m);
+      if (!gmap.has(g)) gmap.set(g, []);
+      gmap.get(g)!.push(m);
+    });
+    gmap.forEach((items, g) => {
+      items.forEach((m, idx) => orders.push({ menu_id: m.menu_id, display_order: idx + 1, training_group: g }));
+    });
+    setMenus(newFlat); // 楽観更新
+    try {
+      await callApi('updateTrainingMenuOrder', { orders });
+    } catch (e: any) {
+      setError(e.message);
+      load();
+    }
+  };
+
+  const onDropOn = (targetId: string) => {
+    if (!dragId || dragId === targetId) { setDragId(null); return; }
+    const dragged = menus.find((m) => m.menu_id === dragId);
+    const target = menus.find((m) => m.menu_id === targetId);
+    if (!dragged || !target) { setDragId(null); return; }
+    const without = menus.filter((m) => m.menu_id !== dragId);
+    const moved = { ...dragged, training_group: groupOf(target) };
+    const tIdx = without.findIndex((m) => m.menu_id === targetId);
+    without.splice(tIdx, 0, moved);
+    persistOrder(without);
+    setDragId(null);
+  };
+
+  const move = async (groupItems: any[], i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= groupItems.length) return;
+    const flat = menus.slice();
+    const a = flat.findIndex((m) => m.menu_id === groupItems[i].menu_id);
+    const b = flat.findIndex((m) => m.menu_id === groupItems[j].menu_id);
+    [flat[a], flat[b]] = [flat[b], flat[a]];
+    persistOrder(flat);
+  };
 
   const add = async () => {
     setError(null); setInfo(null); setLimitMsg(null);
@@ -60,6 +106,7 @@ export default function MenuManager() {
       await callApi('createTrainingMenu', params);
       setPicked({ master: null, freeName: '' });
       setName('');
+      setGroup('');
       setInfo('追加しました');
       load();
     } catch (e: any) {
@@ -68,24 +115,6 @@ export default function MenuManager() {
     } finally {
       setClientId(`${Date.now()}_${Math.random().toString(36).slice(2)}`);
     }
-  };
-
-  const move = async (groupItems: any[], i: number, dir: -1 | 1) => {
-    const j = i + dir;
-    if (j < 0 || j >= groupItems.length) return;
-    try {
-      await callApi('updateTrainingMenu', { menu_id: groupItems[i].menu_id, display_order: groupItems[j].display_order });
-      await callApi('updateTrainingMenu', { menu_id: groupItems[j].menu_id, display_order: groupItems[i].display_order });
-      load();
-    } catch (e: any) { setError(e.message); }
-  };
-
-  const changeGroup = async (menuId: string, g: string) => {
-    setError(null);
-    try {
-      await callApi('updateTrainingMenu', { menu_id: menuId, training_group: g });
-      load();
-    } catch (e: any) { setError(e.message); }
   };
 
   const del = async (id: string) => {
@@ -97,12 +126,15 @@ export default function MenuManager() {
     } catch (e: any) { setError(e.message); }
   };
 
+  if (loading) return <Loading />;
+
   return (
     <div className="max-w-md mx-auto space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-gray-800">マイメニュー</h1>
         <span className="text-xs text-gray-500">{limit !== null ? `${menus.length}/${limit}枠` : '無制限'}</span>
       </div>
+      <p className="text-[10px] text-gray-400">ドラッグ＆ドロップで並び替え・グループ移動（自動保存）</p>
 
       <div className="space-y-3">
         {groups.length === 0 && <p className="p-4 text-sm text-gray-500 bg-white rounded-xl">まだメニューがありません。</p>}
@@ -111,20 +143,19 @@ export default function MenuManager() {
             <p className="px-3 py-2 text-xs font-bold text-white bg-gray-700">{g.key}</p>
             <div className="divide-y divide-gray-100">
               {g.items.map((m, i) => (
-                <div key={m.menu_id} className="p-3 flex items-center gap-2">
+                <div
+                  key={m.menu_id}
+                  draggable
+                  onDragStart={() => setDragId(m.menu_id)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => onDropOn(m.menu_id)}
+                  className={'p-3 flex items-center gap-2 ' + (dragId === m.menu_id ? 'opacity-40' : '')}
+                >
+                  <span className="text-gray-300 text-xs">⠿</span>
                   <div className="flex-1">
                     <p className="text-sm font-bold text-gray-800">{m.menu_name}</p>
                     <p className="text-xs text-gray-500">{m.training_type}</p>
                   </div>
-                  <select
-                    value={groupOf(m)}
-                    onChange={(e) => changeGroup(m.menu_id, e.target.value)}
-                    className="text-[10px] border rounded px-1 py-0.5 text-gray-500"
-                  >
-                    {(allGroupNames.includes(groupOf(m)) ? allGroupNames : [groupOf(m), ...allGroupNames]).map((x) => (
-                      <option key={x} value={x}>{x}</option>
-                    ))}
-                  </select>
                   <button onClick={() => move(g.items, i, -1)} className="px-2 py-1 text-xs bg-gray-100 rounded">↑</button>
                   <button onClick={() => move(g.items, i, 1)} className="px-2 py-1 text-xs bg-gray-100 rounded">↓</button>
                   <button onClick={() => del(m.menu_id)} className="px-2 py-1 text-xs text-rose-600 bg-rose-50 rounded">削除</button>
@@ -144,16 +175,12 @@ export default function MenuManager() {
             if (!p.master && p.freeName) setName(p.freeName);
           }}
         />
-        <input
-          list="group-suggestions"
-          value={group}
-          onChange={(e) => setGroup(e.target.value)}
-          placeholder="グループ（例: 胸の日 / 有酸素）※未入力ならその他"
-          className="w-full border rounded p-2 text-sm"
+        <p className="text-sm font-bold text-gray-600">グループ</p>
+        <NamePicker
+          candidates={groups.map((g) => g.key).filter((k) => k !== OTHER)}
+          onPick={setGroup}
+          placeholder="例: 胸の日 / 有酸素"
         />
-        <datalist id="group-suggestions">
-          {allGroupNames.filter((g) => g !== OTHER).map((g) => <option key={g} value={g} />)}
-        </datalist>
         {!picked.master && picked.freeName !== '' && (
           <select value={freeType} onChange={(e) => setFreeType(e.target.value)} className="w-full border rounded p-2 text-sm">
             <option value="strength">筋トレ</option>

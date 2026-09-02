@@ -1,22 +1,26 @@
 import { useEffect, useState } from 'react';
 import { callApi } from '../services/api';
+import Loading from '../components/Loading';
 
 export default function Dashboard() {
+  const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState<any>(null);
   const [dash, setDash] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([callApi('getDailyCalorieSummary', {}), callApi('getDashboardData')])
-      .then(([s, d]) => {
-        setSummary(s);
-        setDash(d);
+    callApi('getDashboardAll')
+      .then((d: any) => {
+        setSummary(d.summary);
+        setDash(d.dashboard);
       })
-      .catch((e: any) => setError(e.message));
+      .catch((e: any) => setError(e.message))
+      .finally(() => setLoading(false));
   }, []);
 
+  if (loading) return <Loading />;
   if (error) return <p className="text-rose-600 text-sm">エラー: {error}</p>;
-  if (!summary || !dash) return <p className="text-gray-500 text-sm">読み込み中...</p>;
+  if (!summary || !dash) return <Loading />;
 
   return (
     <div className="space-y-4 max-w-3xl">

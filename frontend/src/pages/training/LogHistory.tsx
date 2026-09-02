@@ -1,28 +1,36 @@
 import { useEffect, useState } from 'react';
 import { callApi } from '../../services/api';
+import Loading from '../../components/Loading';
 
 function key(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 export default function LogHistory() {
+  const [loading, setLoading] = useState(true);
   const [logs, setLogs] = useState<any[]>([]);
   const [restricted, setRestricted] = useState(false);
   const [range, setRange] = useState<'7' | '30' | '90'>('7');
   const [error, setError] = useState<string | null>(null);
 
   const load = (r: string) => {
+    setLoading(true);
+    setError(null);
     const to = new Date();
     const from = new Date();
     from.setDate(to.getDate() - (Number(r) - 1));
     callApi('getTrainingLogs', { from: key(from), to: key(to) })
       .then((d: any) => {
         setLogs(d.logs);
-        setRestricted(d.range_restricted);
+        setRestricted(!!d.range_restricted);
       })
-      .catch((e: any) => setError(e.message));
+      .catch((e: any) => setError(e.message))
+      .finally(() => setLoading(false));
   };
-  useEffect(() => { load(range); }, [range]);
+
+  useEffect(() => {
+    load(range);
+  }, [range]);
 
   const remove = async (id: string) => {
     if (!window.confirm('この記録を削除しますか？')) return;
@@ -30,7 +38,9 @@ export default function LogHistory() {
     try {
       await callApi('deleteTrainingLog', { training_log_id: id });
       load(range);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) {
+      setError(e.message);
+    }
   };
 
   return (
@@ -53,25 +63,29 @@ export default function LogHistory() {
       {restricted && <p className="text-xs text-gray-500">無料プランは直近7日のみ閲覧できます。PROで全期間開放。</p>}
       {error && <p className="text-rose-600 text-sm">エラー: {error}</p>}
 
-      <div className="bg-white rounded-xl shadow-sm divide-y divide-gray-100">
-        {logs.length === 0 && <p className="p-4 text-sm text-gray-500">期間中に記録がありません。</p>}
-        {logs.map((l: any) => (
-          <div key={l.training_log_id} className="p-4 flex items-center justify-between gap-2">
-            <div className="flex-1">
-              <p className="text-sm font-bold text-gray-800">{l.exercise_name_snapshot}</p>
-              <p className="text-xs text-gray-500">
-                {String(l.training_date).slice(0, 10)} / {l.training_type}
-                {l.sets && l.sets.length > 0 ? ` / ${l.sets.length}セット` : ''}
-                {l.duration_min ? ` / ${l.duration_min}分` : ''}
-                {l.distance_km ? ` / ${l.distance_km}km` : ''}
-              </p>
-              <p className="text-[10px] text-gray-400">推定消費カロリー（参考値）</p>
+      {loading ? (
+        <Loading />
+      ) : (
+        <div className="bg-white rounded-xl shadow-sm divide-y divide-gray-100">
+          {logs.length === 0 && <p className="p-4 text-sm text-gray-500">期間中に記録がありません。</p>}
+          {logs.map((l: any) => (
+            <div key={l.training_log_id} className="p-4 flex items-center justify-between gap-2">
+              <div className="flex-1">
+                <p className="text-sm font-bold text-gray-800">{l.exercise_name_snapshot}</p>
+                <p className="text-xs text-gray-500">
+                  {String(l.training_date).slice(0, 10)} / {l.training_type}
+                  {l.sets && l.sets.length > 0 ? ` / ${l.sets.length}セット` : ''}
+                  {l.duration_min ? ` / ${l.duration_min}分` : ''}
+                  {l.distance_km ? ` / ${l.distance_km}km` : ''}
+                </p>
+                <p className="text-[10px] text-gray-400">推定消費カロリー（参考値）</p>
+              </div>
+              <p className="text-sm font-bold text-emerald-600">{l.estimated_calories} kcal</p>
+              <button onClick={() => remove(l.training_log_id)} className="px-2 py-1 text-xs text-rose-600 bg-rose-50 rounded">削除</button>
             </div>
-            <p className="text-sm font-bold text-emerald-600">{l.estimated_calories} kcal</p>
-            <button onClick={() => remove(l.training_log_id)} className="px-2 py-1 text-xs text-rose-600 bg-rose-50 rounded">削除</button>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -216,6 +216,28 @@ function apiUpdateTrainingMenu(userId, params) {
   });
 }
 
+// D&D並び替え一括保存（ロック内で一括更新）
+function apiUpdateTrainingMenuOrder(userId, params) {
+  return withLock_(function () {
+    const orders = params.orders || [];
+    if (!orders.length) return { ok: true, data: {} };
+    const ids = orders.map(function (o) { return String(o.menu_id); });
+    const mine = getRows('Training_Menus', function (r) {
+      return String(r['user_id']) === String(userId) && ids.indexOf(String(r['menu_id'])) !== -1;
+    });
+    if (mine.length !== ids.length) return { ok: false, error: { code: 'NOT_FOUND', message: 'メニューが見つかりません' } };
+    orders.forEach(function (o) {
+      updateRowById('Training_Menus', 'menu_id', o.menu_id, {
+        display_order: Number(o.display_order) || 0,
+        training_group: String(o.training_group || 'その他'),
+        updated_at: nowIso_()
+      });
+    });
+    invalidateMenuCaches_(userId);
+    return { ok: true, data: {} };
+  });
+}
+
 function apiDeleteTrainingMenu(userId, params) {
   return withLock_(function () {
     const menu = findById('Training_Menus', 'menu_id', params.menu_id);
@@ -449,6 +471,7 @@ function dispatchTraining(userId, action, params) {
     case 'getTrainingMenus': return apiGetTrainingMenus(userId, params);
     case 'createTrainingMenu': return apiCreateTrainingMenu(userId, params);
     case 'updateTrainingMenu': return apiUpdateTrainingMenu(userId, params);
+    case 'updateTrainingMenuOrder': return apiUpdateTrainingMenuOrder(userId, params);
     case 'deleteTrainingMenu': return apiDeleteTrainingMenu(userId, params);
     case 'getTrainingLogs': return apiGetTrainingLogs(userId, params);
     case 'createTrainingLog': return apiCreateTrainingLog(userId, params);

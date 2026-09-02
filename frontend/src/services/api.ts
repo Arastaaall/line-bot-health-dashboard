@@ -10,22 +10,29 @@ export class ApiError extends Error {
   }
 }
 
+const RETRYABLE = [404, 500, 502, 503];
+
 async function fetchWithRetry(body: string): Promise<Response> {
   const init: RequestInit = {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body,
   };
-  try {
-    return await fetch(GAS_URL, init);
-  } catch (e) {
-    await new Promise((r) => setTimeout(r, 800));
+  let lastStatus = 0;
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      return await fetch(GAS_URL, init);
-    } catch (e2) {
-      throw new ApiError('NETWORK', '通信に失敗しました。一時的なエラーの可能性があります。履歴を確認してから再操作してください。');
+      const res = await fetch(GAS_URL, init);
+      if (res.ok || RETRYABLE.indexOf(res.status) === -1) return res;
+      lastStatus = res.status;
+    } catch (e) {
+      lastStatus = 0;
     }
+    if (attempt < 2) await new Promise((r) => setTimeout(r, 900));
   }
+  if (lastStatus === 0) {
+    throw new ApiError('NETWORK', '通信に失敗しました。一時的なエラーの可能性があります。履歴を確認してから再操作してください。');
+  }
+  throw new ApiError('NETWORK', `サーバー通信エラー (HTTP ${lastStatus})。操作は完了している可能性があります。履歴を確認してから再操作してください。`);
 }
 
 export async function callApi<T = unknown>(
@@ -36,10 +43,6 @@ export async function callApi<T = unknown>(
   if (!token) throw new ApiError('AUTH_FAILED', 'LINEトークン未取得です。再ログインしてください');
 
   const res = await fetchWithRetry(JSON.stringify({ token, action, params }));
-
-  if (!res.ok) {
-    throw new ApiError('NETWORK', `サーバー通信エラー (HTTP ${res.status})。操作は完了している可能性があります。履歴を確認してから再操作してください。`);
-  }
   const json = await res.json();
 
   if (json?.ok === true) return json.data as T;
