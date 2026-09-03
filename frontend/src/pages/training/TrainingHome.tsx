@@ -3,8 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { callApi } from '../../services/api';
 import Loading from '../../components/Loading';
 
-function todayKey() {
-  const d = new Date();
+function key(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
@@ -16,10 +15,12 @@ export default function TrainingHome() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const t = todayKey();
+    const t = key(new Date());
     callApi('getTrainingLogs', { from: t, to: t })
       .then((d: any) => {
-        setLogs(d.logs);
+        // 無料プランはサーバーが直近7日を返すため、今日分だけフロントで抽出
+        const todayLogs = (d.logs || []).filter((l: any) => key(new Date(l.training_date)) === t);
+        setLogs(todayLogs);
         setRestricted(!!d.range_restricted);
       })
       .catch((e: any) => setError(e.message))
