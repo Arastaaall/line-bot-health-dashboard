@@ -1,1 +1,4 @@
 @import "tailwindcss";
+body.cursor-grabbing, body.cursor-grabbing * {
+  cursor: grabbing !important;
+}

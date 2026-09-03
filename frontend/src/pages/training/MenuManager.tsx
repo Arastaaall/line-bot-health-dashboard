@@ -20,6 +20,7 @@ export default function MenuManager() {
   const [limitMsg, setLimitMsg] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
   const [clientId, setClientId] = useState(() => `${Date.now()}_${Math.random().toString(36).slice(2)}`);
 
   const load = () => {
@@ -59,7 +60,7 @@ export default function MenuManager() {
     gmap.forEach((items, g) => {
       items.forEach((m, idx) => orders.push({ menu_id: m.menu_id, display_order: idx + 1, training_group: g }));
     });
-    setMenus(newFlat); // 楽観更新
+    setMenus(newFlat); // 楽観更新（自動保存）
     try {
       await callApi('updateTrainingMenuOrder', { orders });
     } catch (e: any) {
@@ -69,19 +70,20 @@ export default function MenuManager() {
   };
 
   const onDropOn = (targetId: string) => {
-    if (!dragId || dragId === targetId) { setDragId(null); return; }
+    if (!dragId || dragId === targetId) { setDragId(null); setOverId(null); return; }
     const dragged = menus.find((m) => m.menu_id === dragId);
     const target = menus.find((m) => m.menu_id === targetId);
-    if (!dragged || !target) { setDragId(null); return; }
+    if (!dragged || !target) { setDragId(null); setOverId(null); return; }
     const without = menus.filter((m) => m.menu_id !== dragId);
     const moved = { ...dragged, training_group: groupOf(target) };
     const tIdx = without.findIndex((m) => m.menu_id === targetId);
     without.splice(tIdx, 0, moved);
     persistOrder(without);
     setDragId(null);
+    setOverId(null);
   };
 
-  const move = async (groupItems: any[], i: number, dir: -1 | 1) => {
+  const move = (groupItems: any[], i: number, dir: -1 | 1) => {
     const j = i + dir;
     if (j < 0 || j >= groupItems.length) return;
     const flat = menus.slice();
@@ -146,10 +148,28 @@ export default function MenuManager() {
                 <div
                   key={m.menu_id}
                   draggable
-                  onDragStart={() => setDragId(m.menu_id)}
-                  onDragOver={(e) => e.preventDefault()}
+                  onDragStart={(e) => {
+                    setDragId(m.menu_id);
+                    e.dataTransfer.setData('text/plain', m.menu_id);
+                    e.dataTransfer.effectAllowed = 'move';
+                    document.body.classList.add('cursor-grabbing');
+                  }}
+                  onDragEnd={() => {
+                    setDragId(null);
+                    setOverId(null);
+                    document.body.classList.remove('cursor-grabbing');
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                  }}
+                  onDragEnter={() => setOverId(m.menu_id)}
                   onDrop={() => onDropOn(m.menu_id)}
-                  className={'p-3 flex items-center gap-2 ' + (dragId === m.menu_id ? 'opacity-40' : '')}
+                  className={
+                    'p-3 flex items-center gap-2 cursor-grab transition-all ' +
+                    (dragId === m.menu_id ? 'opacity-40 scale-[0.98] ring-2 ring-blue-300 ' : '') +
+                    (overId === m.menu_id && dragId !== null && dragId !== m.menu_id ? 'bg-blue-50 border-t-2 border-blue-400 ' : '')
+                  }
                 >
                   <span className="text-gray-300 text-xs">⠿</span>
                   <div className="flex-1">

@@ -33,7 +33,10 @@ export default function TrainingHome() {
   return (
     <div className="space-y-4 max-w-3xl">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-gray-800">トレーニング</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-xl font-bold text-gray-800">トレーニング</h1>
+          {restricted && <span className="text-xs text-gray-500">本日 {logs.length}/7件</span>}
+        </div>
         {limitReached ? (
           <span className="text-xs text-gray-400">本日の上限に到達</span>
         ) : (
@@ -51,7 +54,11 @@ export default function TrainingHome() {
       <div className="bg-white rounded-xl shadow-sm divide-y divide-gray-100">
         {logs.length === 0 && <p className="p-4 text-sm text-gray-500">今日はまだトレーニング記録がありません。</p>}
         {logs.map((l: any) => (
-          <div key={l.training_log_id} className="p-4 flex items-center justify-between">
+          <button
+            key={l.training_log_id}
+            onClick={() => nav(`/training/log/${l.training_log_id}`)}
+            className="w-full p-4 flex items-center justify-between text-left hover:bg-gray-50"
+          >
             <div>
               <p className="text-sm font-bold text-gray-800">{l.exercise_name_snapshot}</p>
               <p className="text-xs text-gray-500">
@@ -62,7 +69,7 @@ export default function TrainingHome() {
               </p>
             </div>
             <p className="text-sm font-bold text-emerald-600">{l.estimated_calories} kcal</p>
-          </div>
+          </button>
         ))}
       </div>
       <div className="flex gap-2 text-sm">

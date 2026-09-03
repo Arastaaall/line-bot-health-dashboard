@@ -114,6 +114,54 @@ function apiGetTrainingLogs(userId, params) {
     return logs.sort(function (a, b) { return new Date(b['training_date']) - new Date(a['training_date']); });
   });
 
+// ログ詳細＋同種目の過去履歴
+function apiGetTrainingLogDetail(userId, params) {
+  const log = findById('Training_Logs', 'training_log_id', params.training_log_id);
+  if (!log || String(log['user_id']) !== String(userId)) {
+    return { ok: false, error: { code: 'NOT_FOUND', message: 'ログが見つかりません' } };
+  }
+  const sets = getSetsOfLog_(params.training_log_id);
+  const user = getUserRecord_(userId);
+
+  const d7 = new Date(); d7.setDate(d7.getDate() - 6);
+  const d90 = new Date(); d90.setDate(d90.getDate() - 89);
+  const from = user.isPremium ? dateKeyOf_(d90) : dateKeyOf_(d7);
+  const to = todayKey_();
+
+  const masterId = String(log['master_id'] || '');
+  const sameName = String(log['exercise_name_snapshot']);
+
+  const setsAll = getRows('Training_Sets');
+  const countBy = {};
+  setsAll.forEach(function (s) {
+    const k = String(s['training_log_id']);
+    countBy[k] = (countBy[k] || 0) + 1;
+  });
+
+  const history = getRows('Training_Logs', function (r) {
+    if (String(r['user_id']) !== String(userId)) return false;
+    if (String(r['training_log_id']) === String(log['training_log_id'])) return false;
+    const match = masterId !== ''
+      ? String(r['master_id'] || '') === masterId
+      : String(r['exercise_name_snapshot']) === sameName;
+    if (!match) return false;
+    const k = dateKeyOf_(new Date(r['training_date']));
+    return k >= from && k <= to;
+  }).sort(function (a, b) { return new Date(b['training_date']) - new Date(a['training_date']); })
+    .slice(0, 20)
+    .map(function (r) {
+      return {
+        training_log_id: r['training_log_id'],
+        training_date: r['training_date'],
+        estimated_calories: r['estimated_calories'],
+        duration_min: r['duration_min'],
+        sets_count: countBy[String(r['training_log_id'])] || 0,
+      };
+    });
+
+  return { ok: true, data: { log: log, sets: sets, history: history, history_restricted: !user.isPremium } };
+}
+
   let from, to;
   const d7 = new Date();
   d7.setDate(d7.getDate() - 6);
@@ -474,6 +522,7 @@ function dispatchTraining(userId, action, params) {
     case 'updateTrainingMenuOrder': return apiUpdateTrainingMenuOrder(userId, params);
     case 'deleteTrainingMenu': return apiDeleteTrainingMenu(userId, params);
     case 'getTrainingLogs': return apiGetTrainingLogs(userId, params);
+    case 'getTrainingLogDetail': return apiGetTrainingLogDetail(userId, params);
     case 'createTrainingLog': return apiCreateTrainingLog(userId, params);
     case 'updateTrainingLog': return apiUpdateTrainingLog(userId, params);
     case 'deleteTrainingLog': return apiDeleteTrainingLog(userId, params);
