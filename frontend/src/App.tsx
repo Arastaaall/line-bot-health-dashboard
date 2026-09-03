@@ -7,6 +7,7 @@ import TrainingHome from './pages/training/TrainingHome';
 import LogForm from './pages/training/LogForm';
 import MenuManager from './pages/training/MenuManager';
 import LogHistory from './pages/training/LogHistory';
+import LogDetail from './pages/training/LogDetail';
 
 function App() {
   const [ready, setReady] = useState(false);
@@ -39,6 +40,7 @@ function App() {
           <Route path="/training/log" element={<LogForm />} />
           <Route path="/training/menus" element={<MenuManager />} />
           <Route path="/training/history" element={<LogHistory />} />
+          <Route path="/training/log/:id" element={<LogDetail />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

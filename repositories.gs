@@ -79,3 +79,13 @@ function deleteRowsByForeignKey(sheetName, fkColumn, fkValue) {
   }
   return count;
 }
+
+function appendRowsObjs(sheetName, objs) {
+  if (!objs || objs.length === 0) return;
+  const sh = sheet_(sheetName);
+  const header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  const rows = objs.map(function (obj) {
+    return header.map(function (col) { return obj.hasOwnProperty(col) ? obj[col] : ''; });
+  });
+  sh.getRange(sh.getLastRow() + 1, 1, rows.length, header.length).setValues(rows);
+}
