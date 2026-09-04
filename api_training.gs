@@ -209,6 +209,84 @@ function apiGetTrainingFormInit(userId, params) {
   return { ok: true, data: { menus: menus.menus, limit: menus.limit, exercises: master.exercises } };
 }
 
+// ---------- ルーティンボード（グループ別メニュー＋直近2セッション） ----------
+function apiGetTrainingBoard(userId, params) {
+  const user = getUserRecord_(userId);
+  const menus = cached_('menus_' + userId, 600, function () {
+    return getRows('Training_Menus', function (r) {
+      return String(r['user_id']) === String(userId) && toBool_(r['is_active']);
+    }).sort(function (a, b) { return (Number(a['display_order']) || 0) - (Number(b['display_order']) || 0); });
+  });
+
+  const dFrom = new Date();
+  dFrom.setDate(dFrom.getDate() - (user.isPremium ? 89 : 6));
+  const from = dateKeyOf_(dFrom);
+
+  const logs = getRows('Training_Logs', function (r) {
+    return String(r['user_id']) === String(userId) && dateKeyOf_(new Date(r['training_date'])) >= from;
+  });
+  const setsAll = getRows('Training_Sets');
+  const setsByLog = {};
+  setsAll.forEach(function (s) {
+    const k = String(s['training_log_id']);
+    (setsByLog[k] = setsByLog[k] || []).push(s);
+  });
+
+  const logsByMenu = {};
+  logs.forEach(function (l) {
+    const k = String(l['menu_id'] || '');
+    if (!k) return;
+    (logsByMenu[k] = logsByMenu[k] || []).push(l);
+  });
+
+  const OTHER = 'その他';
+  const groupsMap = {};
+  menus.forEach(function (m) {
+    const g = String(m['training_group'] || OTHER) || OTHER;
+    if (!groupsMap[g]) groupsMap[g] = [];
+    const sessions = (logsByMenu[m['menu_id']] || [])
+      .sort(function (a, b) { return new Date(b['training_date']) - new Date(a['training_date']); })
+      .slice(0, 2)
+      .map(function (l) {
+        return {
+          training_log_id: l['training_log_id'],
+          date: dateKeyOf_(new Date(l['training_date'])),
+          duration_min: l['duration_min'],
+          distance_km: l['distance_km'],
+          rpe: l['rpe'],
+          memo: l['memo'],
+          sets: (setsByLog[String(l['training_log_id'])] || [])
+            .sort(function (a, b) { return (Number(a['set_no']) || 0) - (Number(b['set_no']) || 0); })
+            .map(function (s) {
+              return { weight_kg: s['weight_kg'], reps: s['reps'], rpe: s['rpe'], is_bodyweight: s['is_bodyweight'] };
+            })
+        };
+      });
+    groupsMap[g].push({
+      menu_id: m['menu_id'],
+      menu_name: m['menu_name'],
+      training_type: m['training_type'],
+      last_date: sessions.length ? sessions[0].date : null,
+      sessions: sessions
+    });
+  });
+
+  const order = Object.keys(groupsMap).sort(function (a, b) {
+    if (a === OTHER) return 1;
+    if (b === OTHER) return -1;
+    return 0;
+  });
+  const groups = order.map(function (g) {
+    let last = null;
+    groupsMap[g].forEach(function (it) {
+      if (it.last_date && (!last || it.last_date > last)) last = it.last_date;
+    });
+    return { group: g, last_date: last, items: groupsMap[g] };
+  });
+
+  return { ok: true, data: { groups: groups } };
+}
+
 // ---------- Write系 ----------
 function apiCreateTrainingMenu(userId, params) {
   return withLock_(function () {
@@ -565,6 +643,7 @@ function dispatchTraining(userId, action, params) {
     case 'getDailyCalorieSummary': return apiGetDailyCalorieSummary(userId, params);
     case 'getDashboardAll': return apiGetDashboardAll(userId, params);
     case 'getTrainingFormInit': return apiGetTrainingFormInit(userId, params);
+    case 'getTrainingBoard': return apiGetTrainingBoard(userId, params);
     default: return { ok: false, error: { code: 'NOT_FOUND', message: 'Unknown action: ' + action } };
   }
 }

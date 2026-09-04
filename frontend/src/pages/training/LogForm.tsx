@@ -4,6 +4,7 @@ import { callApi } from '../../services/api';
 import ExercisePicker from '../../components/ExercisePicker';
 import type { PickedExercise } from '../../components/ExercisePicker';
 import Loading from '../../components/Loading';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 const RPE_LABELS = ['楽だった', '余裕あり', 'まあまあ', 'かなりきつい', '限界', '地獄'];
 const OTHER = 'その他';
@@ -43,6 +44,18 @@ export default function LogForm() {
   const [groupTab, setGroupTab] = useState<string>('');
   const [inputs, setInputs] = useState<Record<string, { sets: SetRow[]; duration: string; distance: string }>>({});
   const [batchResult, setBatchResult] = useState<{ name: string; calories: number }[] | null>(null);
+  const [searchParams] = useSearchParams();
+  const focusMenuId = searchParams.get('menu');
+
+  useEffect(() => {
+    if (focusMenuId && menus.length) {
+      const m = menus.find((x) => x.menu_id === focusMenuId);
+      if (m) {
+        setTab('menu');
+        setGroupTab(String(m.training_group || 'その他'));
+      }
+    }
+  }, [focusMenuId, menus]);
 
   useEffect(() => {
     callApi('getTrainingFormInit')
