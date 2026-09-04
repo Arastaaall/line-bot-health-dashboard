@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { callApi } from '../../services/api';
 import ExercisePicker from '../../components/ExercisePicker';
 import type { PickedExercise } from '../../components/ExercisePicker';
