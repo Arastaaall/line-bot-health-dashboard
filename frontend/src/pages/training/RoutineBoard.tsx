@@ -73,8 +73,15 @@ export default function RoutineBoard() {
 
   return (
     <div className="space-y-3">
+      <div className="rounded-lg border-l-4 border-blue-500 bg-blue-50 px-3 py-2 space-y-1">
+        <p className="text-xs font-bold text-blue-700">📌 記録はメニューごとに管理されます</p>
+        <p className="text-[11px] text-blue-700">
+          同じ種目でもメニュー名が違えば（例: 「高重量の日」と「高回数の日」）トレーニング履歴は別々に管理されます。
+          種目追加タブから記録した分はここには表示されません。
+        </p>
+      </div>
       <p className="text-[10px] text-gray-400 bg-white rounded-lg px-3 py-2">
-        これ以上の詳細な記録を見る場合は「成長の記録」を確認してください。
+        これよりも詳細な記録を見る場合は「成長の記録」を確認してください。
       </p>
 
       <div className="flex gap-1 overflow-x-auto pb-1">
