@@ -490,6 +490,160 @@ function apiCreateTrainingLog(userId, params) {
   });
 }
 
+// ---------- バッチ登録（マイメニュー一括記録用） ----------
+function apiCreateTrainingLogsBatch(userId, params) {
+  return withLock_(function () {
+    const dup = dedupCheck_(params.client_id);
+    if (dup) return dup;
+
+    const user = getUserRecord_(userId);
+    const logs = params.logs || [];
+    if (!logs.length) return { ok: false, error: { code: 'VALIDATION_ERROR', message: 'ログが指定されていません' } };
+
+    // 無料プラン: 当日の既存件数＋今回件数が上限を超えないか
+    const todayKey = todayKey_();
+    if (!user.isPremium) {
+      const todayCount = getRows('Training_Logs', function (r) {
+        return String(r['user_id']) === String(userId) && dateKeyOf_(new Date(r['training_date'])) === todayKey;
+      }).length;
+      if (todayCount + logs.length > 7) {
+        return { ok: false, error: { code: 'LIMIT_EXCEEDED', message: '無料プランは1日7件までです（本日' + todayCount + '件登録済み）' } };
+      }
+    }
+
+    const results = [];
+    const now = nowIso_();
+    const dateKeys = {};
+
+    logs.forEach(function (log, idx) {
+      // バリデーション
+      const errors = validateTrainingLogBase_(log).concat(validateSets_(log.sets));
+      if (errors.length) {
+        results.push({ index: idx, ok: false, error: errors.join(' / ') });
+        return;
+      }
+
+      // 名称・マスター解決
+      let masterId = log.master_id || '';
+      let exerciseName = String(log.exercise_name || '').trim();
+      if (log.menu_id) {
+        const menu = findById('Training_Menus', 'menu_id', log.menu_id);
+        if (!menu || String(menu['user_id']) !== String(userId)) {
+          results.push({ index: idx, ok: false, error: 'menu_idが見つかりません' });
+          return;
+        }
+        if (!exerciseName) exerciseName = String(menu['menu_name']);
+        if (!masterId) masterId = String(menu['master_id'] || '');
+      }
+      let metCategory = '';
+      let defaultMet = null;
+      if (masterId) {
+        const master = getMasterDefaults_(masterId);
+        if (master) {
+          if (!exerciseName) exerciseName = master.exercise_name;
+          metCategory = master.met_category;
+          defaultMet = master.default_met_value;
+        }
+      }
+      if (!exerciseName) {
+        results.push({ index: idx, ok: false, error: 'exercise_nameは必須です' });
+        return;
+      }
+
+      const rpeResolved = resolveRpe_(log);
+      const bodyWeight = user.weight !== null ? user.weight : 60;
+
+      let calc;
+      if (log.training_type === 'cardio') {
+        calc = calculateCardioCalories({
+          exerciseName: exerciseName,
+          duration_min: toNumber_(log.duration_min, null),
+          distance_km: toNumber_(log.distance_km, null),
+          defaultMet: defaultMet || 3.5,
+          body_weight: bodyWeight
+        });
+      } else {
+        calc = calculateStrengthCalories({
+          sets: log.sets || [],
+          body_weight: bodyWeight,
+          metCategory: metCategory,
+          duration_min: toNumber_(log.duration_min, null),
+          rpe: rpeResolved.rpe
+        });
+      }
+
+      const logId = makeId_('tl');
+      appendRowObj('Training_Logs', {
+        training_log_id: logId,
+        user_id: userId,
+        menu_id: log.menu_id || '',
+        master_id: masterId,
+        exercise_name_snapshot: exerciseName,
+        training_type: log.training_type,
+        training_date: log.training_date,
+        duration_min: cellNum_(log.duration_min),
+        distance_km: cellNum_(log.distance_km),
+        incline_pct: cellNum_(log.incline_pct),
+        rpe: rpeResolved.rpe === null ? '' : rpeResolved.rpe,
+        rpe_source: rpeResolved.rpe_source,
+        estimated_calories: calc.calories,
+        calorie_estimation_method: calc.method,
+        calorie_formula_version: FORMULA_VERSION,
+        body_weight: bodyWeight,
+        memo: log.memo || '',
+        created_at: now,
+        updated_at: now
+      });
+
+      // セット一括書き込み
+      const setRows = (log.sets || []).map(function (s, i) {
+        const isBw = toBool_(s.is_bodyweight);
+        const wRaw = toNumber_(s.weight_kg, null);
+        return {
+          set_id: makeId_('ts'),
+          training_log_id: logId,
+          set_no: i + 1,
+          weight_kg: (isBw && wRaw === null) ? 0 : cellNum_(s.weight_kg),
+          reps: toNumber_(s.reps, 0),
+          rpe: cellNum_(s.rpe),
+          is_bodyweight: isBw,
+          duration_sec: cellNum_(s.duration_sec),
+          rest_sec: cellNum_(s.rest_sec),
+          memo: s.memo || '',
+          created_at: now
+        };
+      });
+      appendRowsObjs('Training_Sets', setRows);
+
+      // 日付キーを記録（キャッシュ無効化用）
+      const dk = log.training_date ? dateKeyOf_(new Date(log.training_date)) : todayKey;
+      dateKeys[dk] = true;
+
+      results.push({
+        index: idx,
+        ok: true,
+        data: {
+          training_log_id: logId,
+          estimated_calories: calc.calories,
+          calorie_estimation_method: calc.method,
+          calorie_formula_version: FORMULA_VERSION,
+          body_weight: bodyWeight
+        }
+      });
+    });
+
+    // キャッシュ無効化（全日付分をまとめて）
+    Object.keys(dateKeys).forEach(function (dk) {
+      invalidateLogCaches_(userId, dk);
+    });
+
+    const allOk = results.every(function (r) { return r.ok; });
+    const res = { ok: allOk, data: { results: results, count: results.length } };
+    if (allOk) dedupSave_(params.client_id, res);
+    return res;
+  });
+}
+
 function apiUpdateTrainingLog(userId, params) {
   return withLock_(function () {
     const log = findById('Training_Logs', 'training_log_id', params.training_log_id);
@@ -638,6 +792,7 @@ function dispatchTraining(userId, action, params) {
     case 'getTrainingLogs': return apiGetTrainingLogs(userId, params);
     case 'getTrainingLogDetail': return apiGetTrainingLogDetail(userId, params);
     case 'createTrainingLog': return apiCreateTrainingLog(userId, params);
+    case 'createTrainingLogsBatch': return apiCreateTrainingLogsBatch(userId, params);
     case 'updateTrainingLog': return apiUpdateTrainingLog(userId, params);
     case 'deleteTrainingLog': return apiDeleteTrainingLog(userId, params);
     case 'getDailyCalorieSummary': return apiGetDailyCalorieSummary(userId, params);

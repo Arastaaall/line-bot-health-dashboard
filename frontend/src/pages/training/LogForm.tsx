@@ -134,7 +134,7 @@ export default function LogForm() {
   // ---------- マイメニュータブ 一括保存 ----------
   const submitBatch = async () => {
     setError(null); setLimitMsg(null);
-    const results: { name: string; calories: number }[] = [];
+    const batchLogs: any[] = [];
     setSaving(true);
     try {
       for (const g of groups) {
@@ -152,7 +152,8 @@ export default function LogForm() {
             ? (inp.duration !== '' || inp.distance !== '')
             : (filledSets.length > 0 || inp.duration !== '');
           if (!hasData) continue;
-          const params: any = {
+
+          const logData: any = {
             menu_id: m.menu_id,
             training_date: date,
             training_type: m.training_type,
@@ -164,14 +165,29 @@ export default function LogForm() {
               rpe: s.rpe === '' ? null : Number(s.rpe),
               is_bodyweight: s.is_bodyweight,
             })),
-            client_id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
           };
-          const r: any = await callApi('createTrainingLog', params);
-          results.push({ name: m.menu_name, calories: r.estimated_calories });
+          batchLogs.push(logData);
         }
       }
-      if (results.length === 0) { setError('記録する入力がありません'); setSaving(false); return; }
-      setBatchResult(results);
+      if (batchLogs.length === 0) { setError('記録する入力がありません'); setSaving(false); return; }
+
+      // 一括API呼び出し（1回で全件）
+      const res: any = await callApi('createTrainingLogsBatch', {
+        client_id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        logs: batchLogs,
+      });
+
+      const successResults = res.results.filter((r: any) => r.ok).map((r: any) => ({
+        name: batchLogs[r.index].menu_id ? menus.find((m) => m.menu_id === batchLogs[r.index].menu_id)?.menu_name || '' : '',
+        calories: r.data.estimated_calories,
+      }));
+
+      if (successResults.length === 0) {
+        setError('記録に失敗しました');
+        setSaving(false);
+        return;
+      }
+      setBatchResult(successResults);
     } catch (e: any) {
       if (e.code === 'LIMIT_EXCEEDED') setLimitMsg(e.message);
       else setError(e.message);
