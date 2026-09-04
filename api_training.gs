@@ -209,7 +209,14 @@ function apiGetTrainingFormInit(userId, params) {
   return { ok: true, data: { menus: menus.menus, limit: menus.limit, exercises: master.exercises } };
 }
 
-// ---------- ルーティンボード（グループ別メニュー＋直近2セッション） ----------
+function timeLabelOf_(createdAt) {
+  const s = String(createdAt || '');
+  const t = s.indexOf('T');
+  if (t === -1) return '';
+  return s.slice(t + 1, t + 6); // HH:mm
+}
+
+// ---------- ルーティンボード（その他グループは扱わない・日付単位で最新2回） ----------
 function apiGetTrainingBoard(userId, params) {
   const user = getUserRecord_(userId);
   const menus = cached_('menus_' + userId, 600, function () {
@@ -239,44 +246,54 @@ function apiGetTrainingBoard(userId, params) {
     (logsByMenu[k] = logsByMenu[k] || []).push(l);
   });
 
-  const OTHER = 'その他';
   const groupsMap = {};
   menus.forEach(function (m) {
-    const g = String(m['training_group'] || OTHER) || OTHER;
+    const g = String(m['training_group'] || 'その他') || 'その他';
+    if (g === 'その他') return; // ルーティンではその他を扱わない
     if (!groupsMap[g]) groupsMap[g] = [];
-    const sessions = (logsByMenu[m['menu_id']] || [])
+
+    // 日付単位にグループ化
+    const byDate = {};
+    (logsByMenu[m['menu_id']] || [])
       .sort(function (a, b) { return new Date(b['training_date']) - new Date(a['training_date']); })
-      .slice(0, 2)
-      .map(function (l) {
-        return {
-          training_log_id: l['training_log_id'],
-          date: dateKeyOf_(new Date(l['training_date'])),
-          duration_min: l['duration_min'],
-          distance_km: l['distance_km'],
-          rpe: l['rpe'],
-          memo: l['memo'],
-          sets: (setsByLog[String(l['training_log_id'])] || [])
-            .sort(function (a, b) { return (Number(a['set_no']) || 0) - (Number(b['set_no']) || 0); })
-            .map(function (s) {
-              return { weight_kg: s['weight_kg'], reps: s['reps'], rpe: s['rpe'], is_bodyweight: s['is_bodyweight'] };
-            })
-        };
+      .forEach(function (l) {
+        const dk = dateKeyOf_(new Date(l['training_date']));
+        if (!byDate[dk]) byDate[dk] = [];
+        byDate[dk].push(l);
       });
+
+    const dates = Object.keys(byDate).sort().reverse().slice(0, 2);
+    const sessions = dates.map(function (dk) {
+      return {
+        date: dk,
+        entries: byDate[dk].map(function (l) {
+          return {
+            training_log_id: l['training_log_id'],
+            time: timeLabelOf_(l['created_at']),
+            duration_min: l['duration_min'],
+            distance_km: l['distance_km'],
+            rpe: l['rpe'],
+            memo: l['memo'],
+            sets: (setsByLog[String(l['training_log_id'])] || [])
+              .sort(function (a, b) { return (Number(a['set_no']) || 0) - (Number(b['set_no']) || 0); })
+              .map(function (s) {
+                return { weight_kg: s['weight_kg'], reps: s['reps'], rpe: s['rpe'], is_bodyweight: s['is_bodyweight'] };
+              })
+          };
+        })
+      };
+    });
+
     groupsMap[g].push({
       menu_id: m['menu_id'],
       menu_name: m['menu_name'],
       training_type: m['training_type'],
-      last_date: sessions.length ? sessions[0].date : null,
+      last_date: dates.length ? dates[0] : null,
       sessions: sessions
     });
   });
 
-  const order = Object.keys(groupsMap).sort(function (a, b) {
-    if (a === OTHER) return 1;
-    if (b === OTHER) return -1;
-    return 0;
-  });
-  const groups = order.map(function (g) {
+  const groups = Object.keys(groupsMap).map(function (g) {
     let last = null;
     groupsMap[g].forEach(function (it) {
       if (it.last_date && (!last || it.last_date > last)) last = it.last_date;
