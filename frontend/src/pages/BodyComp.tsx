@@ -77,11 +77,11 @@ function FormModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => v
         </div>
 
         <select value={device} onChange={(e) => setDevice(e.target.value)} className="w-full border rounded p-2 text-sm">
-          <option value="home_scale">家庭用スケール</option>
-          <option value="inbody">InBody</option>
-          <option value="manual">手動</option>
-          <option value="other">その他</option>
+            <option value="home_scale">家庭用体重計／体組成計（タニタ等）</option>
+            <option value="inbody">InBody／精密体組成計</option>
+            <option value="other">その他（健診・簡易スケール等）</option>
         </select>
+
 
         <div className="grid grid-cols-2 gap-2">
           <label className="text-xs text-gray-600">測定日 *
