@@ -4,6 +4,7 @@ const links = [
   { to: '/', label: '📊 ダッシュボード' },
   { to: '/training', label: '🏋️ トレーニング' },
   { to: '/body', label: '⚖️ 体組成' },
+    { to: '/growth', label: '📈 成長の記録' },
 ];
 
 export default function AppLayout() {

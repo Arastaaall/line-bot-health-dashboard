@@ -81,7 +81,9 @@ export default function RoutineBoard() {
         </p>
       </div>
       <p className="text-[10px] text-gray-400 bg-white rounded-lg px-3 py-2">
-        これよりも詳細な記録を見る場合は「成長の記録」を確認してください。
+        これ以上の詳細な記録を見る場合は{' '}
+        <button onClick={() => nav('/growth')} className="text-blue-600 underline">成長の記録</button>
+        を確認してください。
       </p>
 
       <div className="flex gap-1 overflow-x-auto pb-1">
