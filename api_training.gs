@@ -819,6 +819,7 @@ function dispatchTraining(userId, action, params) {
     case 'getBodyComposition': return apiGetBodyComposition(userId, params);
     case 'createBodyCompositionLog': return apiCreateBodyCompositionLog(userId, params);
     case 'deleteBodyCompositionLog': return apiDeleteBodyCompositionLog(userId, params);
+    case 'getGrowthSummary': return apiGetGrowthSummary(userId, params);
     default: return { ok: false, error: { code: 'NOT_FOUND', message: 'Unknown action: ' + action } };
   }
 }
