@@ -1,4 +1,4 @@
-// api_growth.gs — Phase 6 成長の記録（読取専用: append/update/delete不使用）
+// api_growth.gs — Phase 6 成長の記録（読取専用: append/update/deleteは一切不使用）
 
 function apiGetGrowthSummary(userId, params) {
   const user = getUserRecord_(userId);
@@ -13,6 +13,7 @@ function apiGetGrowthSummary(userId, params) {
 }
 
 function buildGrowthSummary_(userId, range, isPremium) {
+  const user = getUserRecord_(userId);
   const to = todayKey_();
   let from = null;
   if (range === '7d') { const d = new Date(); d.setDate(d.getDate() - 6); from = dateKeyOf_(d); }
@@ -31,7 +32,7 @@ function buildGrowthSummary_(userId, range, isPremium) {
   }
   const inRange = function (k) { return (!from || k >= from) && k <= to; };
 
-  // ---- 一括読み込み ----
+  // ---- 一括読み込み（読取のみ） ----
   const tLogs = getRows('Training_Logs', function (r) {
     return String(r['user_id']) === String(userId) && inRange(dateKeyOf_(new Date(r['training_date'])));
   });
@@ -100,16 +101,16 @@ function buildGrowthSummary_(userId, range, isPremium) {
     estimated_kcal: tLogs.reduce(function (s, l) { return s + (toNumber_(l['estimated_calories'], 0) || 0); }, 0)
   };
 
-  // ---- exercise_stats（未登録含む） ----
+  // ---- exercise_stats（未登録含む・master_id→名称順・表記ゆれ正規化はv1非実施） ----
   const eMap = {};
   tLogs.forEach(function (l) {
     const key = logExKey[String(l['training_log_id'])];
     if (!eMap[key]) {
       const mid = String(l['master_id'] || '');
-      eMap[key] = { name: String(l['exercise_name_snapshot']), master_id: mid !== '' ? mid : null, logged_count: 0, volume_kg: 0, max_weight_kg: null, last_date: null };
+      eMap[key] = { name: String(l['exercise_name_snapshot']), master_id: mid !== '' ? mid : null, exercise_logs: 0, volume_kg: 0, max_weight_kg: null, last_date: null };
     }
     const e = eMap[key];
-    e.logged_count += 1;
+    e.exercise_logs += 1;
     const k = dateKeyOf_(new Date(l['training_date']));
     if (!e.last_date || k > e.last_date) e.last_date = k;
   });
@@ -126,7 +127,7 @@ function buildGrowthSummary_(userId, range, isPremium) {
   const exerciseStats = Object.keys(eMap).map(function (k) { return eMap[k]; })
     .sort(function (a, b) { return a.last_date < b.last_date ? 1 : -1; });
 
-  // ---- weight_series（同日はmeasured_at最新を1点） ----
+  // ---- weight_series（測定点のみ・昇順・同日はmeasured_at最新を1点） ----
   const wByDate = {};
   bLogs.forEach(function (r) {
     const w = toNumber_(r['weight_kg'], null);
@@ -140,7 +141,7 @@ function buildGrowthSummary_(userId, range, isPremium) {
     return { date: k, weight_kg: wByDate[k].weight_kg };
   });
 
-  // ---- bodycomp_series（PROのみ・非NULLフィルタ） ----
+  // ---- bodycomp_series（PROのみ・非NULLフィルタ・昇順） ----
   let bodycompSeries = [];
   if (isPremium) {
     bodycompSeries = bLogs
@@ -157,6 +158,30 @@ function buildGrowthSummary_(userId, range, isPremium) {
       });
   }
 
+  // ---- 最新体重・BMI（保存しない・都度計算） ----
+  const latestWeight = weightSeries.length ? weightSeries[weightSeries.length - 1].weight_kg : null;
+  let bmi = null;
+  if (latestWeight !== null && user.height !== null && user.height > 0) {
+    const hm = user.height / 100;
+    bmi = Math.round((latestWeight / (hm * hm)) * 10) / 10;
+  }
+
+  // ---- 最新の体組成値（Free/PRO共通・Phase3のdetail定義と同じフィルタ） ----
+  const detailRows = bLogs
+    .filter(function (r) {
+      return toNumber_(r['body_fat_pct'], null) !== null || toNumber_(r['skeletal_muscle_kg'], null) !== null;
+    })
+    .sort(function (a, b) { return new Date(b['measured_at']) - new Date(a['measured_at']); });
+  const latestBodycomp = detailRows.length ? {
+    date: dateKeyOf_(new Date(detailRows[0]['measured_at'])),
+    body_fat_pct: toNumber_(detailRows[0]['body_fat_pct'], null),
+    skeletal_muscle_kg: toNumber_(detailRows[0]['skeletal_muscle_kg'], null),
+    muscle_mass_kg: toNumber_(detailRows[0]['muscle_mass_kg'], null),
+    visceral_fat: toNumber_(detailRows[0]['visceral_fat'], null),
+    bmr: toNumber_(detailRows[0]['bmr'], null),
+    waist_cm: toNumber_(detailRows[0]['waist_cm'], null)
+  } : null;
+
   // ---- intake_daily ----
   const iMap = {};
   mLogs.forEach(function (r) {
@@ -170,6 +195,9 @@ function buildGrowthSummary_(userId, range, isPremium) {
   return {
     range: { from: from, to: to },
     plan_limits: { range_days: isPremium ? null : 7 },
+    latest_weight_kg: latestWeight,
+    bmi: bmi,
+    latest_bodycomp: latestBodycomp,
     weight_series: weightSeries,
     bodycomp_series: bodycompSeries,
     training_daily: trainingDaily,

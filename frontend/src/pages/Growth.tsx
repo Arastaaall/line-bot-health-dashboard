@@ -12,7 +12,7 @@ const RANGES = [
 ];
 
 export default function Growth() {
-  const [tab, setTab] = useState<'body' | 'training' | 'meal'>('body');
+  const [tab, setTab] = useState<'overview' | 'body' | 'training' | 'meal'>('overview');
   const [range, setRange] = useState('7d');
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -39,6 +39,21 @@ export default function Growth() {
   const isFree = data?.plan_limits?.range_days === 7;
   const weekly = range === '1y' || range === 'all';
   const n = data?.notes || {};
+  const t = data?.training_totals || {};
+
+  const ws: any[] = data?.weight_series || [];
+  let deltaText = '--';
+  if (ws.length >= 2 && ws[ws.length - 1].weight_kg != null && ws[ws.length - 2].weight_kg != null) {
+    const diff = Math.round((ws[ws.length - 1].weight_kg - ws[ws.length - 2].weight_kg) * 10) / 10;
+    const arrow = diff < 0 ? '↓' : diff > 0 ? '↑' : '→';
+    deltaText = `${diff > 0 ? '+' : ''}${diff} kg ${arrow}`;
+  }
+
+  const weightPoints = ws.map((p: any) => ({ date: p.date, value: p.weight_kg }));
+  const volumePoints = (data?.training_daily || []).map((p: any) => ({ date: p.date, value: p.volume_kg }));
+  const intakePoints = (data?.intake_daily || []).map((p: any) => ({ date: p.date, value: p.intake_kcal }));
+  const bfPoints = (data?.bodycomp_series || []).map((p: any) => ({ date: p.date, value: p.body_fat_pct }));
+  const smPoints = (data?.bodycomp_series || []).map((p: any) => ({ date: p.date, value: p.skeletal_muscle_kg }));
 
   return (
     <div className="max-w-3xl mx-auto space-y-4">
@@ -59,12 +74,12 @@ export default function Growth() {
       {isFree && <p className="text-[10px] text-gray-400">無料プランは直近7日のみ表示。PROで全期間開放。</p>}
       {weekly && <p className="text-[10px] text-gray-400">週次集計（月曜始まり）</p>}
 
-      <div className="flex gap-2">
-        {([['body', '体重・体組成'], ['training', 'トレーニング'], ['meal', '食事']] as const).map(([k, label]) => (
+      <div className="flex gap-2 overflow-x-auto">
+        {([['overview', '総合'], ['body', '体重・体組成'], ['training', 'トレーニング'], ['meal', '食事']] as const).map(([k, label]) => (
           <button
             key={k}
             onClick={() => setTab(k)}
-            className={'px-4 py-2 rounded-full text-sm font-bold ' + (tab === k ? 'bg-blue-600 text-white' : 'bg-white text-gray-600')}
+            className={'shrink-0 px-4 py-2 rounded-full text-sm font-bold ' + (tab === k ? 'bg-blue-600 text-white' : 'bg-white text-gray-600')}
           >
             {label}
           </button>
@@ -75,21 +90,83 @@ export default function Growth() {
 
       {loading ? (
         <Loading />
-      ) : !data ? null : tab === 'body' ? (
+      ) : !data ? null : tab === 'overview' ? (
         <div className="space-y-4">
+          <div className="bg-white rounded-xl p-4 shadow-sm grid grid-cols-3 gap-2 text-center">
+            <div><p className="text-xs text-gray-500">最新体重</p><p className="text-lg font-bold">{data.latest_weight_kg != null ? `${data.latest_weight_kg} kg` : '--'}</p></div>
+            <div><p className="text-xs text-gray-500">BMI</p><p className="text-lg font-bold">{data.bmi != null ? data.bmi : '--'}</p></div>
+            <div><p className="text-xs text-gray-500">前回比</p><p className="text-lg font-bold text-blue-600">{deltaText}</p></div>
+          </div>
+
+          <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">
+            <p className="text-sm font-bold text-gray-600">体重</p>
+            <LineChart height={90} points={weightPoints} />
+          </div>
+
+          {(data.bodycomp_series || []).length > 0 && (
+            <div className="grid grid-cols-2 gap-2">
+              <div className="bg-white rounded-xl p-3 shadow-sm space-y-1">
+                <p className="text-xs font-bold text-gray-600">体脂肪率</p>
+                <LineChart height={70} points={bfPoints} />
+              </div>
+              <div className="bg-white rounded-xl p-3 shadow-sm space-y-1">
+                <p className="text-xs font-bold text-gray-600">骨格筋量</p>
+                <LineChart height={70} points={smPoints} />
+              </div>
+            </div>
+          )}
+
+          <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">
+            <p className="text-sm font-bold text-gray-600">トレーニング（ボリューム）</p>
+            <BarChart height={90} points={volumePoints} />
+            <div className="grid grid-cols-4 gap-1 text-center pt-1">
+              <div><p className="text-[10px] text-gray-400">実施日数</p><p className="text-sm font-bold">{t.active_days}</p></div>
+              <div><p className="text-[10px] text-gray-400">種目実施数</p><p className="text-sm font-bold">{t.exercise_logs}</p></div>
+              <div><p className="text-[10px] text-gray-400">有酸素(分)</p><p className="text-sm font-bold">{t.cardio_min}</p></div>
+              <div><p className="text-[10px] text-gray-400">推定消費*</p><p className="text-sm font-bold text-emerald-600">{t.estimated_kcal}</p></div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">
+            <p className="text-sm font-bold text-gray-600">食事（摂取カロリー）</p>
+            <BarChart height={90} points={intakePoints} />
+          </div>
+
+          {n.intake && <p className="text-[10px] text-gray-400">{n.intake}</p>}
+          {n.exercise && <p className="text-[10px] text-gray-400">＊ {n.exercise}</p>}
+        </div>
+      ) : tab === 'body' ? (
+        <div className="space-y-4">
+          <div className="bg-white rounded-xl p-4 shadow-sm grid grid-cols-2 gap-2 text-center">
+            <div><p className="text-xs text-gray-500">最新体重</p><p className="text-lg font-bold">{data.latest_weight_kg != null ? `${data.latest_weight_kg} kg` : '--'}</p></div>
+            <div><p className="text-xs text-gray-500">BMI</p><p className="text-lg font-bold">{data.bmi != null ? data.bmi : '--'}</p></div>
+          </div>
+          {data.latest_bodycomp && (
+            <div className="bg-white rounded-xl p-4 shadow-sm space-y-1">
+              <p className="text-sm font-bold text-gray-600">最新の体組成値（{data.latest_bodycomp.date}）</p>
+              <div className="grid grid-cols-3 gap-1 text-center">
+                {data.latest_bodycomp.body_fat_pct != null && <div><p className="text-[10px] text-gray-400">体脂肪率</p><p className="text-sm font-bold">{data.latest_bodycomp.body_fat_pct}</p></div>}
+                {data.latest_bodycomp.skeletal_muscle_kg != null && <div><p className="text-[10px] text-gray-400">骨格筋量</p><p className="text-sm font-bold">{data.latest_bodycomp.skeletal_muscle_kg}</p></div>}
+                {data.latest_bodycomp.muscle_mass_kg != null && <div><p className="text-[10px] text-gray-400">筋肉量</p><p className="text-sm font-bold">{data.latest_bodycomp.muscle_mass_kg}</p></div>}
+                {data.latest_bodycomp.visceral_fat != null && <div><p className="text-[10px] text-gray-400">内臓脂肪</p><p className="text-sm font-bold">{data.latest_bodycomp.visceral_fat}</p></div>}
+                {data.latest_bodycomp.bmr != null && <div><p className="text-[10px] text-gray-400">BMR</p><p className="text-sm font-bold">{data.latest_bodycomp.bmr}</p></div>}
+                {data.latest_bodycomp.waist_cm != null && <div><p className="text-[10px] text-gray-400">腹囲</p><p className="text-sm font-bold">{data.latest_bodycomp.waist_cm}</p></div>}
+              </div>
+            </div>
+          )}
           <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">
             <p className="text-sm font-bold text-gray-600">体重推移 (kg)</p>
-            <LineChart points={(data.weight_series || []).map((p: any) => ({ date: p.date, value: p.weight_kg }))} />
+            <LineChart points={weightPoints} />
           </div>
           {(data.bodycomp_series || []).length > 0 ? (
             <>
               <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">
                 <p className="text-sm font-bold text-gray-600">体脂肪率推移 (%)</p>
-                <LineChart points={data.bodycomp_series.map((p: any) => ({ date: p.date, value: p.body_fat_pct }))} />
+                <LineChart points={bfPoints} />
               </div>
               <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">
                 <p className="text-sm font-bold text-gray-600">骨格筋量推移 (kg)</p>
-                <LineChart points={data.bodycomp_series.map((p: any) => ({ date: p.date, value: p.skeletal_muscle_kg }))} />
+                <LineChart points={smPoints} />
               </div>
             </>
           ) : (
@@ -100,15 +177,15 @@ export default function Growth() {
       ) : tab === 'training' ? (
         <div className="space-y-4">
           <div className="bg-white rounded-xl p-4 shadow-sm grid grid-cols-3 gap-2 text-center">
-            <div><p className="text-xs text-gray-500">ボリューム (kg)</p><p className="text-lg font-bold">{data.training_totals.volume_kg}</p></div>
-            <div><p className="text-xs text-gray-500">種目実施数</p><p className="text-lg font-bold">{data.training_totals.exercise_logs}</p></div>
-            <div><p className="text-xs text-gray-500">トレーニング日数</p><p className="text-lg font-bold">{data.training_totals.active_days}</p></div>
-            <div><p className="text-xs text-gray-500">有酸素 (分)</p><p className="text-lg font-bold">{data.training_totals.cardio_min}</p></div>
-            <div><p className="text-xs text-gray-500">推定消費 *</p><p className="text-lg font-bold text-emerald-600">{data.training_totals.estimated_kcal}</p></div>
+            <div><p className="text-xs text-gray-500">ボリューム (kg)</p><p className="text-lg font-bold">{t.volume_kg}</p></div>
+            <div><p className="text-xs text-gray-500">種目実施数</p><p className="text-lg font-bold">{t.exercise_logs}</p></div>
+            <div><p className="text-xs text-gray-500">実施日数</p><p className="text-lg font-bold">{t.active_days}</p></div>
+            <div><p className="text-xs text-gray-500">有酸素 (分)</p><p className="text-lg font-bold">{t.cardio_min}</p></div>
+            <div><p className="text-xs text-gray-500">推定消費 *</p><p className="text-lg font-bold text-emerald-600">{t.estimated_kcal}</p></div>
           </div>
           <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">
             <p className="text-sm font-bold text-gray-600">ボリューム推移 (kg)</p>
-            <BarChart points={(data.training_daily || []).map((p: any) => ({ date: p.date, value: p.volume_kg }))} />
+            <BarChart points={volumePoints} />
           </div>
           {n.volume && <p className="text-[10px] text-gray-400">{n.volume}</p>}
           {n.bodyweight && <p className="text-[10px] text-gray-400">{n.bodyweight}</p>}
@@ -121,7 +198,7 @@ export default function Growth() {
                 <div>
                   <p className="text-sm font-bold text-gray-800">{e.name}</p>
                   <p className="text-xs text-gray-500">
-                    {e.logged_count}回{e.max_weight_kg != null ? ` / 最大${e.max_weight_kg}kg` : ''} / 最終 {e.last_date}
+                    {e.exercise_logs}回{e.max_weight_kg != null ? ` / 最大${e.max_weight_kg}kg` : ''} / 最終 {e.last_date}
                   </p>
                 </div>
                 <p className="text-sm font-bold text-blue-600">{e.volume_kg} kg</p>
@@ -133,7 +210,7 @@ export default function Growth() {
         <div className="space-y-4">
           <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">
             <p className="text-sm font-bold text-gray-600">摂取カロリー推移 (kcal)</p>
-            <BarChart points={(data.intake_daily || []).map((p: any) => ({ date: p.date, value: p.intake_kcal }))} />
+            <BarChart points={intakePoints} />
           </div>
           {n.intake && <p className="text-[10px] text-gray-400">{n.intake}</p>}
         </div>
