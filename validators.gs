@@ -64,11 +64,23 @@ function validateBodyComposition_(params) {
   if (w === null) errors.push('weight_kgは必須です');
   else if (w < 20 || w > 300) errors.push('weight_kgは20〜300の範囲で入力してください');
 
-  if (!params.measured_at) errors.push('measured_atは必須です');
-  else if (isNaN(new Date(String(params.measured_at).indexOf('T') !== -1 ? params.measured_at : params.measured_at + 'T00:00:00').getTime())) errors.push('measured_atの形式が不正です');
-  else if (new Date(String(params.measured_at).indexOf('T') !== -1 ? params.measured_at : params.measured_at + 'T23:59:59').getTime() > Date.now()) errors.push('measured_atに未来日は指定できません');
+  // measured_at: 日付のみ→「日付」が今日より先なら拒否／時刻あり→「時刻」が現在より先なら拒否
+  if (!params.measured_at) {
+    errors.push('measured_atは必須です');
+  } else {
+    const s = String(params.measured_at);
+    if (s.indexOf('T') !== -1) {
+      const dt = new Date(s);
+      if (isNaN(dt.getTime())) errors.push('measured_atの形式が不正です');
+      else if (dt.getTime() > Date.now()) errors.push('measured_atに未来日は指定できません');
+    } else {
+      const d = new Date(s + 'T00:00:00');
+      if (isNaN(d.getTime())) errors.push('measured_atの形式が不正です');
+      else if (dateKeyOf_(d) > todayKey_()) errors.push('measured_atに未来日は指定できません');
+    }
+  }
 
-  const devices = ['inbody', 'home_scale', 'manual', 'other']; // migrationはMigration専用
+  const devices = ['inbody', 'home_scale', 'manual', 'other'];
   if (!params.measurement_device || devices.indexOf(params.measurement_device) === -1) {
     errors.push('measurement_deviceが不正です');
   }
