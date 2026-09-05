@@ -3,6 +3,7 @@ import { NavLink, Outlet } from 'react-router-dom';
 const links = [
   { to: '/', label: '📊 ダッシュボード' },
   { to: '/training', label: '🏋️ トレーニング' },
+  { to: '/body', label: '⚖️ 体組成' },
 ];
 
 export default function AppLayout() {
@@ -22,7 +23,7 @@ export default function AppLayout() {
             {l.label}
           </NavLink>
         ))}
-        <div className="mt-auto text-xs text-gray-400">食事記録 / 栄養素 / 体組成<br />は順次開放</div>
+        <div className="mt-auto text-xs text-gray-400">食事記録 / 栄養素<br />は順次開放</div>
       </aside>
       <main className="flex-1 p-4 md:p-6 overflow-x-hidden">
         <div className="md:hidden mb-4 flex gap-2">

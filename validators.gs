@@ -45,3 +45,43 @@ function validateSets_(sets) {
   });
   return errors;
 }
+
+// ---------- Phase 3 体組成バリデーション ----------
+const BODYCOMP_RANGES = {
+  weight_kg: [20, 300],
+  body_fat_pct: [3, 60],
+  skeletal_muscle_kg: [5, 80],
+  muscle_mass_kg: [10, 120],
+  body_water_pct: [30, 75],
+  visceral_fat: [1, 30],
+  bmr: [500, 3000],
+  waist_cm: [40, 200]
+};
+
+function validateBodyComposition_(params) {
+  const errors = [];
+  const w = toNumber_(params.weight_kg, null);
+  if (w === null) errors.push('weight_kgは必須です');
+  else if (w < 20 || w > 300) errors.push('weight_kgは20〜300の範囲で入力してください');
+
+  if (!params.measured_at) errors.push('measured_atは必須です');
+  else if (isNaN(new Date(String(params.measured_at).indexOf('T') !== -1 ? params.measured_at : params.measured_at + 'T00:00:00').getTime())) errors.push('measured_atの形式が不正です');
+  else if (new Date(String(params.measured_at).indexOf('T') !== -1 ? params.measured_at : params.measured_at + 'T23:59:59').getTime() > Date.now()) errors.push('measured_atに未来日は指定できません');
+
+  const devices = ['inbody', 'home_scale', 'manual', 'other']; // migrationはMigration専用
+  if (!params.measurement_device || devices.indexOf(params.measurement_device) === -1) {
+    errors.push('measurement_deviceが不正です');
+  }
+
+  Object.keys(BODYCOMP_RANGES).forEach(function (k) {
+    if (k === 'weight_kg') return;
+    if (params[k] === undefined || params[k] === null || params[k] === '') return;
+    const v = toNumber_(params[k], null);
+    const range = BODYCOMP_RANGES[k];
+    if (v === null || v < range[0] || v > range[1]) {
+      errors.push(k + 'は' + range[0] + '〜' + range[1] + 'の範囲で入力してください');
+    }
+  });
+
+  return errors;
+}

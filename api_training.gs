@@ -8,7 +8,7 @@ function getUserRecord_(userId) {
     userId: userId,
     name: r ? (r['User_Name'] || r['user_name'] || 'ユーザー') : 'ユーザー',
     weight: r ? toNumber_(r['weight'], null) : null,
-    targetCalories: r ? toNumber_(r['target_calories'], 2000) : 2000,
+    height: r ? toNumber_(r['height'], null) : null,   // ←追加    targetCalories: r ? toNumber_(r['target_calories'], 2000) : 2000,
     isPremium: r ? toBool_(r['is_premium']) : false
   };
 }
@@ -816,6 +816,9 @@ function dispatchTraining(userId, action, params) {
     case 'getDashboardAll': return apiGetDashboardAll(userId, params);
     case 'getTrainingFormInit': return apiGetTrainingFormInit(userId, params);
     case 'getTrainingBoard': return apiGetTrainingBoard(userId, params);
+    case 'getBodyComposition': return apiGetBodyComposition(userId, params);
+    case 'createBodyCompositionLog': return apiCreateBodyCompositionLog(userId, params);
+    case 'deleteBodyCompositionLog': return apiDeleteBodyCompositionLog(userId, params);
     default: return { ok: false, error: { code: 'NOT_FOUND', message: 'Unknown action: ' + action } };
   }
 }

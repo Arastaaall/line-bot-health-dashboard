@@ -8,6 +8,7 @@ import LogForm from './pages/training/LogForm';
 import MenuManager from './pages/training/MenuManager';
 import LogHistory from './pages/training/LogHistory';
 import LogDetail from './pages/training/LogDetail';
+import BodyComp from './pages/BodyComp';
 
 function App() {
   const [ready, setReady] = useState(false);
@@ -41,6 +42,7 @@ function App() {
           <Route path="/training/menus" element={<MenuManager />} />
           <Route path="/training/history" element={<LogHistory />} />
           <Route path="/training/log/:id" element={<LogDetail />} />
+          <Route path="/body" element={<BodyComp />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
