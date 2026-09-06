@@ -230,10 +230,12 @@ export function MultiLineChart({ series, height = 120, unit = '' }: {
   );
 }
 
-export function ComboChart({ bars, line, height = 140 }: {
+export function ComboChart({ bars, line, height = 140, barLabel = '摂取', lineLabel = '消費' }: {
   bars: { date: string; value: number }[];
   line: { date: string; value: number }[];
   height?: number;
+  barLabel?: string;
+  lineLabel?: string;
 }) {
   if (!bars.length) return <EmptyNote />;
   const dates = bars.map((b) => b.date);
@@ -266,8 +268,8 @@ export function ComboChart({ bars, line, height = 140 }: {
         ))}
       </svg>
       <div className="flex justify-between text-[10px]">
-        <span className="text-emerald-600">■ 摂取 max{barMax}</span>
-        <span className="text-blue-600">― 消費 max{lineMax}</span>
+        <span className="text-emerald-600">■ {barLabel} max{barMax}</span>
+        <span className="text-blue-600">― {lineLabel} max{lineMax}</span>
       </div>
     </div>
   );
