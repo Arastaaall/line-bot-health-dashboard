@@ -10,6 +10,7 @@ import LogHistory from './pages/training/LogHistory';
 import LogDetail from './pages/training/LogDetail';
 import BodyComp from './pages/BodyComp';
 import Growth from './pages/Growth';
+import NutritionPage from './pages/nutrition/NutritionPage';
 
 function App() {
   const [ready, setReady] = useState(false);
@@ -46,6 +47,7 @@ function App() {
           <Route path="/body" element={<BodyComp />} />
           <Route path="/growth" element={<Growth />} />
           <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="/nutrition" element={<NutritionPage />} />
         </Route>
       </Routes>
     </HashRouter>
