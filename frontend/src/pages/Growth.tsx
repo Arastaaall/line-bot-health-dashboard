@@ -76,52 +76,29 @@ function OneRMChart({ data }: { data: any[] }) {
   );
 }
 
-function MenuTrajectory({ menus }: { menus: any[] }) {
-  const groups = Array.from(new Set(menus.map((m) => String(m.training_group || 'その他'))));
-  const [group, setGroup] = useState(groups[0] || '');
-  const groupMenus = menus.filter((m) => String(m.training_group || 'その他') === group);
-  const [menuId, setMenuId] = useState(groupMenus[0]?.menu_id);
-  const menu = groupMenus.find((m) => m.menu_id === menuId) || groupMenus[0];
+function TrajectoryTable({ menu, showTitle }: { menu: any; showTitle: boolean }) {
   const [tr, setTr] = useState<any>(null);
   const [loadingTr, setLoadingTr] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const cacheRef = useRef<Record<string, any>>({});
 
   useEffect(() => {
-    if (!menu) { setTr(null); return; }
     const ck = menu.master_id || menu.menu_name;
     if (cacheRef.current[ck]) { setTr(cacheRef.current[ck]); return; }
     setLoadingTr(true);
     callApi('getMenuTrajectory', menu.master_id ? { master_id: menu.master_id } : { exercise_name_snapshot: menu.menu_name })
       .then((d: any) => { cacheRef.current[ck] = d; setTr(d); })
       .finally(() => setLoadingTr(false));
-  }, [menu?.menu_id]);
+  }, [menu.menu_id]);
 
   useEffect(() => {
     if (tr && scrollRef.current) scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
   }, [tr]);
 
-  if (!menus.length) return <p className="text-xs text-gray-400">マイメニューがまだありません。</p>;
   const maxSets = tr ? Math.min(Math.max(...tr.sessions.map((s: any) => s.sets.length), 0), 6) : 0;
-
   return (
     <div className="space-y-2">
-      <div className="grid grid-cols-2 gap-2">
-        <select
-          value={group}
-          onChange={(e) => {
-            setGroup(e.target.value);
-            const gm = menus.filter((m) => String(m.training_group || 'その他') === e.target.value);
-            setMenuId(gm[0]?.menu_id);
-          }}
-          className="border rounded p-2 text-sm"
-        >
-          {groups.map((g) => <option key={g} value={g}>{g}</option>)}
-        </select>
-        <select value={menu?.menu_id} onChange={(e) => setMenuId(e.target.value)} className="border rounded p-2 text-sm">
-          {groupMenus.map((m) => <option key={m.menu_id} value={m.menu_id}>{m.menu_name}</option>)}
-        </select>
-      </div>
+      {showTitle && <p className="text-xs font-bold text-gray-700">{menu.menu_name}</p>}
       {loadingTr && <p className="text-xs text-gray-400">読み込み中...</p>}
       {tr?.header && (
         <div className="grid grid-cols-3 gap-2 text-center">
@@ -157,12 +134,38 @@ function MenuTrajectory({ menus }: { menus: any[] }) {
           </table>
         </div>
       )}
-      {tr?.header?.epley_series?.length >= 2 && (
-        <div>
-          <p className="text-[10px] text-gray-400 mb-1">推定1RM推移（reps≤12のみ）</p>
-          <LineChart height={90} points={tr.header.epley_series.map((p: any) => ({ date: p.date, value: p.value }))} />
-        </div>
-      )}
+      {tr && tr.sessions.length === 0 && <p className="text-[10px] text-gray-400">まだ記録がありません</p>}
+    </div>
+  );
+}
+
+function MenuTrajectory({ menus }: { menus: any[] }) {
+  const groups = Array.from(new Set(menus.map((m) => String(m.training_group || 'その他'))));
+  const [group, setGroup] = useState(groups[0] || '');
+  const [menuId, setMenuId] = useState('--');
+  const groupMenus = menus.filter((m) => String(m.training_group || 'その他') === group);
+  const shown = menuId === '--' ? groupMenus : groupMenus.filter((m) => m.menu_id === menuId);
+
+  if (!menus.length) return <p className="text-xs text-gray-400">マイメニューがまだありません。</p>;
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-2">
+        <select
+          value={group}
+          onChange={(e) => { setGroup(e.target.value); setMenuId('--'); }}
+          className="border rounded p-2 text-sm"
+        >
+          {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+        </select>
+        <select value={menuId} onChange={(e) => setMenuId(e.target.value)} className="border rounded p-2 text-sm">
+          <option value="--">--</option>
+          {groupMenus.map((m) => <option key={m.menu_id} value={m.menu_id}>{m.menu_name}</option>)}
+        </select>
+      </div>
+      {shown.length === 0 && <p className="text-xs text-gray-400">このグループにメニューがありません。</p>}
+      {shown.map((m) => (
+        <TrajectoryTable key={m.menu_id} menu={m} showTitle={menuId === '--'} />
+      ))}
     </div>
   );
 }
@@ -269,8 +272,14 @@ export default function Growth() {
             <LineChart height={90} points={weightPoints} />
           </div>
           <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">
-            <p className="text-sm font-bold text-gray-600">トレーニング（ボリューム）</p>
-            <BarChart height={90} points={(data.training_daily || []).map((p: any) => ({ date: p.date, value: p.volume_kg }))} />
+            <p className="text-sm font-bold text-gray-600">トレーニング（ボリューム=棒 / 有酸素分=線）</p>
+            <ComboChart
+              bars={(data.training_daily || []).map((p: any) => ({ date: p.date, value: p.volume_kg }))}
+              line={(data.training_daily || []).map((p: any) => ({ date: p.date, value: p.cardio_min }))}
+              barLabel="ボリューム"
+              lineLabel="有酸素分"
+            />
+            <p className="text-[10px] text-gray-400">棒=筋トレの総重量、線=その日の有酸素分数。有酸素のみの日は棒が0になります。</p>
           </div>
           <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">
             <p className="text-sm font-bold text-gray-600">摂取カロリー（棒）と消費カロリー（線）</p>
