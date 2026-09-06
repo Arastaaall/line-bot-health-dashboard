@@ -820,6 +820,10 @@ function dispatchTraining(userId, action, params) {
     case 'createBodyCompositionLog': return apiCreateBodyCompositionLog(userId, params);
     case 'deleteBodyCompositionLog': return apiDeleteBodyCompositionLog(userId, params);
     case 'getGrowthSummary': return apiGetGrowthSummary(userId, params);
+    case 'getTrainingAnalysis': return apiGetTrainingAnalysis(userId, params);
+    case 'getMenuTrajectory': return apiGetMenuTrajectory(userId, params);
+    case 'getMealAnalysis': return apiGetMealAnalysis(userId, params);
+    case 'getBodyAnalysis': return apiGetBodyAnalysis(userId, params);
     default: return { ok: false, error: { code: 'NOT_FOUND', message: 'Unknown action: ' + action } };
   }
 }
