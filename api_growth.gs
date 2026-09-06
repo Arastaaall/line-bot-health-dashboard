@@ -297,8 +297,8 @@ function gVolumeOfSets_(sets) {
   return v;
 }
 
-// 代表種目: weight>0セットを持つstrength種目のみ・全期間ログ数最多・同数は直近優先
-function gRepresentativeKey_(userId) {
+// 加重セットを持つ種目の上位N件（ログ数順・同数は直近優先）
+function gTopWeightedKeys_(userId, n) {
   const logs = getRows('Training_Logs', function (r) { return String(r['user_id']) === String(userId); });
   const ids = {};
   logs.forEach(function (l) { ids[String(l['training_log_id'])] = true; });
@@ -315,11 +315,14 @@ function gRepresentativeKey_(userId) {
     const d = dateKeyOf_(new Date(l['training_date']));
     if (!last[k] || d > last[k]) last[k] = d;
   });
-  let best = null;
-  Object.keys(count).forEach(function (k) {
-    if (!best || count[k] > count[best] || (count[k] === count[best] && last[k] > last[best])) best = k;
-  });
-  return best;
+  return Object.keys(count).map(function (k) { return { key: k, count: count[k], last: last[k] }; })
+    .sort(function (a, b) { return b.count - a.count || (a.last < b.last ? 1 : -1); })
+    .slice(0, n);
+}
+
+function gRepresentativeKey_(userId) {
+  const top = gTopWeightedKeys_(userId, 1);
+  return top.length ? top[0].key : null;
 }
 
 // 共有関数: PR/伸び率/1RM（T4/T5/T6 と 軌跡ヘッダーで共用）
@@ -448,7 +451,11 @@ function buildTrainingAnalysis_(userId, range) {
     ready('T4', { name: calc.exercise_name, pr_weight: calc.pr_weight, pr_date: calc.pr_date, is_new_pr_in_range: calc.is_new_pr_in_range });
     if (calc.growth_percent === null) insuff('T5');
     else ready('T5', { name: calc.exercise_name, initial_weight: calc.initial_weight, pr_weight: calc.pr_weight, growth_percent: calc.growth_percent });
-    if (calc.epley_series.length >= 2) ready('T6', { name: calc.exercise_name, series: calc.epley_series });
+    const multi = gTopWeightedKeys_(userId, 3).map(function (t) {
+      const c = calculateExercisePrGrowth1rm_(userId, t.key, range);
+      return c && c.epley_series.length >= 2 ? { name: c.exercise_name, series: c.epley_series } : null;
+    }).filter(function (x) { return x !== null; });
+    if (multi.length) ready('T6', multi);
     else insuff('T6');
   })();
 

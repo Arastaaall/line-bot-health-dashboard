@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { callApi } from '../services/api';
 import Loading from '../components/Loading';
+import GrowthGlance from '../components/GrowthGlance';
 
 export default function Dashboard() {
   const [loading, setLoading] = useState(true);
@@ -24,6 +25,7 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-4 max-w-3xl">
+      <GrowthGlance />
       <div className="flex items-center gap-2">
         <h1 className="text-xl font-bold text-gray-800">{dash.user.name}</h1>
         {dash.user.isPremium && (

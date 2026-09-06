@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { callApi } from '../services/api';
 import Loading from '../components/Loading';
-import { LineChart, BarChart } from '../components/charts';
+import { LineChart, BarChart, MultiLineChart, ComboChart } from '../components/charts';
 
 const RANGES = [
   { key: '7d', label: '7日' },
@@ -11,10 +11,20 @@ const RANGES = [
   { key: 'all', label: '全期間' },
 ];
 
-function Block({ b, title, note, children }: any) {
+const BODY_PART_JA: Record<string, string> = { chest: '胸', back: '背中', legs: '脚', shoulders: '肩', arms: '腕', core: '体幹', full_body: '全身', cardio: '有酸素', other: 'その他', 未登録: '未登録' };
+const CARDIO_TYPE_JA: Record<string, string> = { running: 'ランニング', walking: 'ウォーキング', cycling: 'サイクリング', other: 'その他' };
+const COLORS = ['#2563eb', '#10b981', '#f59e0b'];
+
+function Block({ b, title, note, desc, onDesc, children }: any) {
   return (
     <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">
-      <p className="text-sm font-bold text-gray-600">{title}</p>
+      <p
+        className="text-sm font-bold text-gray-600"
+        onMouseEnter={() => desc && onDesc(desc)}
+        onClick={() => desc && onDesc(desc)}
+      >
+        {title}
+      </p>
       {b?.status === 'ready' ? (
         <>
           {children(b.data)}
@@ -42,44 +52,82 @@ function Scatter({ points }: any) {
       <svg viewBox={`0 0 ${w} ${h}`} className="w-full">
         {points.map((p: any, i: number) => <circle key={i} cx={X(p.x)} cy={Y(p.y)} r="3" fill="#8b5cf6" />)}
       </svg>
-      <div className="flex justify-between text-[10px] text-gray-400">
-        <span>体脂肪 {minX}%</span><span>{maxX}%</span>
+      <div className="flex justify-between text-[10px] text-gray-400"><span>体脂肪 {minX}%</span><span>{maxX}%</span></div>
+    </div>
+  );
+}
+
+function OneRMChart({ data }: { data: any[] }) {
+  const [hidden, setHidden] = useState<Record<string, boolean>>({});
+  const visible = data.filter((s) => !hidden[s.name]);
+  return (
+    <div className="space-y-1">
+      {visible.length > 0 && (
+        <MultiLineChart height={100} series={visible.map((s) => ({ name: s.name, color: COLORS[data.indexOf(s) % 3], points: s.series }))} />
+      )}
+      <div className="flex gap-2 flex-wrap">
+        {data.map((s, i) => (
+          <button
+            key={s.name}
+            onClick={() => setHidden((h) => ({ ...h, [s.name]: !h[s.name] }))}
+            className={'flex items-center gap-1 text-[10px] ' + (hidden[s.name] ? 'text-gray-300 line-through' : 'text-gray-600')}
+          >
+            <span className="inline-block w-2 h-2 rounded-full" style={{ background: COLORS[i % 3] }} />
+            {s.name}
+          </button>
+        ))}
       </div>
     </div>
   );
 }
 
-function Trajectory({ options }: { options: any[] }) {
-  const [key, setKey] = useState<any>(options[0] || null);
+function MenuTrajectory({ menus }: { menus: any[] }) {
+  const groups = Array.from(new Set(menus.map((m) => String(m.training_group || 'その他'))));
+  const [group, setGroup] = useState(groups[0] || '');
+  const groupMenus = menus.filter((m) => String(m.training_group || 'その他') === group);
+  const [menuId, setMenuId] = useState(groupMenus[0]?.menu_id);
+  const menu = groupMenus.find((m) => m.menu_id === menuId) || groupMenus[0];
   const [tr, setTr] = useState<any>(null);
+  const [loadingTr, setLoadingTr] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const cacheRef = useRef<Record<string, any>>({});
 
   useEffect(() => {
-    if (!key) return;
-    const ck = key.master_id || key.name;
+    if (!menu) { setTr(null); return; }
+    const ck = menu.master_id || menu.menu_name;
     if (cacheRef.current[ck]) { setTr(cacheRef.current[ck]); return; }
-    setTr(null);
-    callApi('getMenuTrajectory', key.master_id ? { master_id: key.master_id } : { exercise_name_snapshot: key.name })
-      .then((d: any) => { cacheRef.current[ck] = d; setTr(d); });
-  }, [key]);
+    setLoadingTr(true);
+    callApi('getMenuTrajectory', menu.master_id ? { master_id: menu.master_id } : { exercise_name_snapshot: menu.menu_name })
+      .then((d: any) => { cacheRef.current[ck] = d; setTr(d); })
+      .finally(() => setLoadingTr(false));
+  }, [menu?.menu_id]);
 
   useEffect(() => {
     if (tr && scrollRef.current) scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;
   }, [tr]);
 
-  if (!options.length) return <p className="text-xs text-gray-400">軌跡を表示できるstrength種目がまだありません。</p>;
+  if (!menus.length) return <p className="text-xs text-gray-400">マイメニューがまだありません。</p>;
   const maxSets = tr ? Math.min(Math.max(...tr.sessions.map((s: any) => s.sets.length), 0), 6) : 0;
 
   return (
     <div className="space-y-2">
-      <select
-        value={key?.name}
-        onChange={(e) => setKey(options.find((o) => o.name === e.target.value))}
-        className="w-full border rounded p-2 text-sm"
-      >
-        {options.map((o) => <option key={o.name} value={o.name}>{o.name}</option>)}
-      </select>
+      <div className="grid grid-cols-2 gap-2">
+        <select
+          value={group}
+          onChange={(e) => {
+            setGroup(e.target.value);
+            const gm = menus.filter((m) => String(m.training_group || 'その他') === e.target.value);
+            setMenuId(gm[0]?.menu_id);
+          }}
+          className="border rounded p-2 text-sm"
+        >
+          {groups.map((g) => <option key={g} value={g}>{g}</option>)}
+        </select>
+        <select value={menu?.menu_id} onChange={(e) => setMenuId(e.target.value)} className="border rounded p-2 text-sm">
+          {groupMenus.map((m) => <option key={m.menu_id} value={m.menu_id}>{m.menu_name}</option>)}
+        </select>
+      </div>
+      {loadingTr && <p className="text-xs text-gray-400">読み込み中...</p>}
       {tr?.header && (
         <div className="grid grid-cols-3 gap-2 text-center">
           <div><p className="text-[10px] text-gray-400">PR</p><p className="text-sm font-bold">{tr.header.pr_weight}kg{tr.header.is_new_pr_in_range ? ' 🎉' : ''}</p></div>
@@ -131,9 +179,15 @@ export default function Growth() {
   const [trA, setTrA] = useState<any>(null);
   const [mealA, setMealA] = useState<any>(null);
   const [bodyA, setBodyA] = useState<any>(null);
+  const [menus, setMenus] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [desc, setDesc] = useState<string | null>(null);
   const cacheRef = useRef<Record<string, any>>({});
+
+  useEffect(() => {
+    callApi('getTrainingMenus').then((d: any) => setMenus(d.menus || [])).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (cacheRef.current[range]) {
@@ -166,15 +220,16 @@ export default function Growth() {
   const B = trA?.blocks || {};
   const M = mealA?.blocks || {};
   const BB = bodyA?.blocks || {};
+  const dp = { onDesc: setDesc };
 
   const weightPoints = (data?.weight_series || []).map((p: any) => ({ date: p.date, value: p.weight_kg }));
-  const strengthOptions = (data?.exercise_stats || [])
-    .filter((e: any) => e.training_type !== 'cardio')
-    .map((e: any) => ({ name: e.name, master_id: e.master_id }));
+  const intakePoints = (data?.intake_daily || []).map((p: any) => ({ date: p.date, value: p.intake_kcal }));
+  const burnLine = (data?.training_daily || []).map((p: any) => ({ date: p.date, value: p.estimated_kcal }));
 
   return (
     <div className="max-w-3xl mx-auto space-y-4">
       <h1 className="text-xl font-bold text-gray-800">成長の記録</h1>
+      {desc && <p className="text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">{desc}</p>}
 
       <div className="flex gap-1 overflow-x-auto pb-1">
         {RANGES.map((r) => (
@@ -207,13 +262,13 @@ export default function Growth() {
 
       {loading ? <Loading /> : !data ? null : tab === 'overview' ? (
         <div className="space-y-4">
-          <Block b={B.O1} title={`今月のレキャップ（${B.O1?.data?.month || ''}・途中経過）`}>
+          <Block b={B.O1} title="今月のまとめ" desc="今月のトレーニング日数・持ち上げた総重量・体重の変化・平均摂取カロリーをひとまとめにしたカードです。" {...dp}>
             {(d: any) => (
               <div className="grid grid-cols-4 gap-2 text-center">
-                <div><p className="text-[10px] text-gray-400">トレ日数</p><p className="text-sm font-bold">{d.training_days}日</p></div>
-                <div><p className="text-[10px] text-gray-400">ボリューム</p><p className="text-sm font-bold">{d.volume_kg}kg{d.elephant ? ` 🐘${d.elephant}頭分` : ''}</p></div>
-                <div><p className="text-[10px] text-gray-400">体重変化</p><p className="text-sm font-bold">{d.weight_change != null ? `${d.weight_change > 0 ? '+' : ''}${d.weight_change}kg` : '--'}</p></div>
-                <div><p className="text-[10px] text-gray-400">平均摂取</p><p className="text-sm font-bold">{d.avg_intake != null ? `${d.avg_intake}` : '--'}</p></div>
+                <div><p className="text-[10px] text-gray-400">トレした日数</p><p className="text-sm font-bold">{d.training_days}日</p></div>
+                <div><p className="text-[10px] text-gray-400">持ち上げた総重量</p><p className="text-sm font-bold">{d.volume_kg}kg{d.elephant ? ` 🐘${d.elephant}頭分` : ''}</p></div>
+                <div><p className="text-[10px] text-gray-400">体重の変化</p><p className="text-sm font-bold">{d.weight_change != null ? `${d.weight_change > 0 ? '+' : ''}${d.weight_change}kg` : '--'}</p></div>
+                <div><p className="text-[10px] text-gray-400">平均摂取カロリー</p><p className="text-sm font-bold">{d.avg_intake != null ? d.avg_intake : '--'}</p></div>
               </div>
             )}
           </Block>
@@ -227,7 +282,7 @@ export default function Growth() {
           </div>
           <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">
             <p className="text-sm font-bold text-gray-600">食事（摂取カロリー）</p>
-            <BarChart height={90} points={(data.intake_daily || []).map((p: any) => ({ date: p.date, value: p.intake_kcal }))} />
+            <BarChart height={90} points={intakePoints} />
           </div>
           {n.intake && <p className="text-[10px] text-gray-400">{n.intake}</p>}
           {n.exercise && <p className="text-[10px] text-gray-400">＊ {n.exercise}</p>}
@@ -238,15 +293,15 @@ export default function Growth() {
             <p className="text-sm font-bold text-gray-600">体重推移 (kg)</p>
             <LineChart points={weightPoints} />
           </div>
-          <Block b={BB.B0a} title="週あたり体重変化">
+          <Block b={BB.B0a} title="週あたり体重変化" desc="直近4週間の傾向から、1週間あたり何kg変化したかを計算した参考値です。" {...dp}>
             {(d: any) => <p className="text-lg font-bold">{d.weekly_change > 0 ? '+' : ''}{d.weekly_change} kg/週</p>}
           </Block>
-          <Block b={BB.B3} title="4週間後予測" note={bn.prediction}>
+          <Block b={BB.B3} title="4週間後予測" note={bn.prediction} desc="直近4週間の傾向をそのまま延長した場合の4週間後の体重の目安です。目標の達成予測ではありません。" {...dp}>
             {(d: any) => (
               <p className="text-lg font-bold">約{d.predicted_weight}kg <span className="text-xs text-gray-500">（現在ペース {d.pace_per_week > 0 ? '+' : ''}{d.pace_per_week}kg/週）</span></p>
             )}
           </Block>
-          <Block b={BB.B1} title="BMIバンド" note={bn.bmi}>
+          <Block b={BB.B1} title="BMIバンド" note={bn.bmi} desc="BMIの区分（低体重/普通体重/肥満域）を測定ごとに表示します。健康度の評価ではありません。" {...dp}>
             {(d: any[]) => (
               <div className="flex flex-wrap gap-1">
                 {d.map((p, i) => (
@@ -257,7 +312,7 @@ export default function Growth() {
               </div>
             )}
           </Block>
-          <Block b={BB.B4} title="月平均体重">
+          <Block b={BB.B4} title="月平均体重" desc="その月に測定した体重の平均です。測定が3日以上の月のみ表示されます。" {...dp}>
             {(d: any) => (
               <p className="text-lg font-bold">
                 {d.current_avg != null ? `${d.current_avg}kg` : '--'}
@@ -265,10 +320,10 @@ export default function Growth() {
               </p>
             )}
           </Block>
-          <Block b={BB.B0b} title="筋肉×体脂肪スカッター">
+          <Block b={BB.B0b} title="筋肉×体脂肪スカッター" desc="点の位置が右上へ移れば「体脂肪が増えて筋肉も増えた」、左上へ移れば「絞れて筋肉は維持」などの読み方ができます。" {...dp}>
             {(d: any[]) => <Scatter points={d.map((p: any) => ({ x: p.body_fat_pct, y: p.skeletal_muscle_kg }))} />}
           </Block>
-          <Block b={BB.B6} title="筋肉量/体脂肪量比（参考）" note={bn.ratio}>
+          <Block b={BB.B6} title="筋肉量/体脂肪量比（参考）" note={bn.ratio} desc="体脂肪量に対する骨格筋量の比率。上がっていけば「脂肪に対して筋肉が増えている」傾向の参考になります。" {...dp}>
             {(d: any) => (
               <>
                 <LineChart height={90} points={d.series.map((p: any) => ({ date: p.date, value: p.value }))} />
@@ -276,10 +331,10 @@ export default function Growth() {
               </>
             )}
           </Block>
-          <Block b={BB.B7} title="基礎ラインを下回った食事" note={bn.bmr}>
+          <Block b={BB.B7} title="基礎ラインを下回った食事" note={bn.bmr} desc="安静時の消費量（BMR）よりも摂取カロリーが少なかった日数。少ない日が継続するとトレーニングが続きにくくなります。" {...dp}>
             {(d: any) => <p className="text-lg font-bold">{d.below_days === 0 ? '✅ 0日' : `${d.below_days}日`}</p>}
           </Block>
-          <Block b={BB.B9} title="体重×ランニングペース">
+          <Block b={BB.B9} title="体重×ランニングペース" desc="上=体重、下=ランニング/ウォーキングのペース（分/km）。体重の変化とペースの傾向を並べて確認できます。" {...dp}>
             {(d: any) => (
               <div className="space-y-3">
                 <LineChart height={80} points={d.weight_series.map((p: any) => ({ date: p.date, value: p.weight_kg }))} />
@@ -302,14 +357,14 @@ export default function Growth() {
         </div>
       ) : tab === 'training' ? (
         <div className="space-y-4">
-          <Block b={B.T1} title="部位別ボリューム">
+          <Block b={B.T1} title="部位別ボリューム" desc="胸・背中・脚など部位ごとに持ち上げた総重量を表示します。偏りの確認に使ってください。" {...dp}>
             {(d: any[]) => {
               const max = Math.max(...d.map((x) => x.volume_kg), 1);
               return (
                 <div className="space-y-1">
                   {d.map((x) => (
                     <div key={x.body_part} className="flex items-center gap-2">
-                      <span className="w-14 shrink-0 text-[10px] text-gray-500">{x.body_part}</span>
+                      <span className="w-14 shrink-0 text-[10px] text-gray-500">{BODY_PART_JA[x.body_part] || x.body_part}</span>
                       <div className="flex-1 bg-gray-100 rounded h-3">
                         <div className="bg-blue-500 h-3 rounded" style={{ width: `${(x.volume_kg / max) * 100}%` }} />
                       </div>
@@ -320,12 +375,12 @@ export default function Growth() {
               );
             }}
           </Block>
-          <Block b={B.T2} title="距離別（有酸素）">
+          <Block b={B.T2} title="距離別（有酸素）" desc="ランニング/ウォーキング/サイクリング別の合計距離・回数・平均ペースと、直近5回の記録を表示します。" {...dp}>
             {(d: any[]) => (
               <div className="space-y-3">
                 {d.map((t) => (
                   <div key={t.type} className="space-y-1">
-                    <p className="text-xs font-bold text-gray-700">{t.type}：{t.distance_km}km / {t.count}回 / 平均ペース{t.avg_pace != null ? `${t.avg_pace}分/km` : '--'}</p>
+                    <p className="text-xs font-bold text-gray-700">{CARDIO_TYPE_JA[t.type] || t.type}：{t.distance_km}km / {t.count}回 / 平均ペース{t.avg_pace != null ? `${t.avg_pace}分/km` : '--'}</p>
                     <div className="space-y-0.5">
                       {t.recent.map((r: any, i: number) => (
                         <p key={i} className="text-[10px] text-gray-500">{r.date}｜{r.distance_km != null ? `${r.distance_km}km` : '--'}｜{r.duration_min}分｜{r.pace != null ? `${r.pace}分/km` : '--'}</p>
@@ -336,20 +391,21 @@ export default function Growth() {
               </div>
             )}
           </Block>
-          <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">
-            <p className="text-sm font-bold text-gray-600">種目軌跡</p>
-            {strengthOptions.length > 0 && <Trajectory options={strengthOptions} />}
-          </div>
-          <Block b={B.T4} title="PR（最もよく記録している種目）">
+          <details className="bg-white rounded-xl p-4 shadow-sm space-y-2">
+            <summary className="text-sm font-bold text-gray-600">マイメニュー記録</summary>
+            <p className="text-[10px] text-gray-400">グループと種目を選ぶと、セットごとの記録が日付順（右端が最新）に表示されます。重量が増えたセットは↑でハイライトされます。</p>
+            <MenuTrajectory menus={menus} />
+          </details>
+          <Block b={B.T4} title="PR（最もよく記録している種目）" desc="あなたが最も多く記録している種目の最大重量（PR）です。期間内に過去の記録を更新すると🎉が付きます。" {...dp}>
             {(d: any) => <p className="text-lg font-bold">{d.name} {d.pr_weight}kg <span className="text-xs text-gray-500">{d.pr_date}{d.is_new_pr_in_range ? ' 🎉PR更新' : ''}</span></p>}
           </Block>
-          <Block b={B.T5} title="全期間伸び率">
+          <Block b={B.T5} title="全期間伸び率" desc="アプリに初めて記録した時の最大重量から、現在までに何%伸びたかを示します。例: 60kg→66kg=+10%。" {...dp}>
             {(d: any) => <p className="text-lg font-bold">{d.name}：{d.initial_weight}kg → {d.pr_weight}kg（{d.growth_percent > 0 ? '+' : ''}{d.growth_percent}%）</p>}
           </Block>
-          <Block b={B.T6} title="推定1RM推移" note="reps≤12のセットのみ推定対象">
-            {(d: any) => <LineChart height={90} points={d.series.map((p: any) => ({ date: p.date, value: p.value }))} />}
+          <Block b={B.T6} title="推定1RM推移" desc="重量と回数から推定した「1回だけ挙がる目安の重量」の推移。下の色付きラベルで種目の表示切替ができます。" {...dp}>
+            {(d: any[]) => <OneRMChart data={d} />}
           </Block>
-          <Block b={B.T7} title="体重×週次ボリューム">
+          <Block b={B.T7} title="体重×週次ボリューム" desc="週ごとの持ち上げ総重量（棒）と体重（線）を並べたグラフ。「よく上げた週に体重が増えた」などの傾向確認用です。" {...dp}>
             {(d: any) => (
               <div className="space-y-3">
                 <LineChart height={80} points={d.weight_series.map((p: any) => ({ date: p.date, value: p.weight_kg }))} />
@@ -358,31 +414,34 @@ export default function Growth() {
               </div>
             )}
           </Block>
-          <Block b={B.T8} title="有酸素時間+推定消費">
+          <Block b={B.T8} title="消費カロリー（推定・参考値）" desc="トレーニングによる推定消費カロリーを日별로棒グラフ表示します。実際の消費カロリーとは異なる場合があります。" {...dp}>
             {(d: any[]) => (
-              <div className="space-y-0.5">
-                {d.map((x) => <p key={x.date} className="text-[11px] text-gray-600">{x.date}｜{x.duration_min}分｜{x.estimated_kcal} kcal</p>)}
+              <div className="space-y-2">
+                <BarChart height={90} points={d.map((x) => ({ date: x.date, value: x.estimated_kcal }))} />
+                <div className="space-y-0.5">
+                  {d.map((x) => <p key={x.date} className="text-[10px] text-gray-500">{x.date}｜{x.duration_min}分｜{x.estimated_kcal} kcal</p>)}
+                </div>
               </div>
             )}
           </Block>
-          <Block b={B.T9} title="トレーニング密度" note="トレーニング時間を記録した種目のみで算出した参考値です">
+          <Block b={B.T9} title="トレーニング密度" note="トレーニング時間を記録した種目のみで算出した参考値です" desc="1分あたり何kg持ち上げたか（ボリューム÷時間）。効率の傾向を見る参考値です。" {...dp}>
             {(d: any) => <p className="text-lg font-bold">{d.density_kg_per_min} kg/min <span className="text-xs text-gray-500">最高日 {d.best_day.date}（{d.best_day.rate}）</span></p>}
           </Block>
           <div className="grid grid-cols-2 gap-2">
-            <Block b={B.T10} title="累計ボリューム">
+            <Block b={B.T10} title="累計ボリューム" desc="これまでに持ち上げた総重量。動物の重さに換算して表示します。" {...dp}>
               {(d: any) => <p className="text-sm font-bold">{d.total_t}t {d.achieved ? `（${d.achieved}達成）` : ''}{d.next ? ` / 次: ${d.next}` : ''}</p>}
             </Block>
-            <Block b={B.T11} title="累計距離">
+            <Block b={B.T11} title="累計距離" desc="ランニング+ウォーキングの合計距離。目印の距離を達成するごとに表示されます。" {...dp}>
               {(d: any) => <p className="text-sm font-bold">{d.total_km}km {d.achieved ? `（${d.achieved}達成）` : ''}{d.next ? ` / 次: ${d.next}` : ''}</p>}
             </Block>
           </div>
-          <Block b={B.T12} title="週ストリーク">
+          <Block b={B.T12} title="週ストリーク" desc="1週間に1回以上トレーニングした週が何週連続しているかを示します。" {...dp}>
             {(d: any) => <p className="text-lg font-bold">現在 {d.current_weeks}週連続 <span className="text-xs text-gray-500">最長 {d.longest_weeks}週</span></p>}
           </Block>
-          <Block b={B.T13} title="月間トレーニング日数">
+          <Block b={B.T13} title="月間トレーニング日数" desc="月ごとにトレーニングした日数。今月は途中経過です。" {...dp}>
             {(d: any[]) => <BarChart height={90} points={d.map((m) => ({ date: m.month, value: m.days }))} />}
           </Block>
-          <Block b={B.T14} title="メモタイムライン">
+          <Block b={B.T14} title="メモタイムライン" desc="記録時に残したメモを新しい順に表示します。" {...dp}>
             {(d: any[]) => (
               <div className="space-y-1">
                 {d.map((x, i) => <p key={i} className="text-[11px] text-gray-600">{x.date}｜{x.name}｜{x.memo}</p>)}
@@ -390,7 +449,7 @@ export default function Growth() {
             )}
           </Block>
           <details className="bg-white rounded-xl p-4 shadow-sm space-y-2">
-            <summary className="text-sm font-bold text-gray-600">平均RPE推移（タップで展開）</summary>
+            <summary className="text-sm font-bold text-gray-600" onMouseEnter={() => setDesc('主観的なきつさ（RPE）の週平均の推移。頑張りすぎや疲れの傾向を見る参考値です。')} onClick={() => setDesc('主観的なきつさ（RPE）の週平均の推移。頑張りすぎや疲れの傾向を見る参考値です。')}>平均RPE推移（タップで展開）</summary>
             {B.T15?.status === 'ready' ? (
               <LineChart height={90} points={B.T15.data.map((p: any) => ({ date: p.date, value: p.avg_rpe }))} />
             ) : (
@@ -398,7 +457,7 @@ export default function Growth() {
             )}
           </details>
           <details className="bg-white rounded-xl p-4 shadow-sm space-y-2">
-            <summary className="text-sm font-bold text-gray-600">RPE乖離ヒント（タップで展開）</summary>
+            <summary className="text-sm font-bold text-gray-600" onMouseEnter={() => setDesc('同じ種目・同じ重量なのに普段よりかなりきつく感じた（RPE+2以上）場合に知らせる疲労の参考情報です。')} onClick={() => setDesc('同じ種目・同じ重量なのに普段よりかなりきつく感じた（RPE+2以上）場合に知らせる疲労の参考情報です。')}>RPE乖離ヒント（タップで展開）</summary>
             {B.T16?.status === 'ready' ? (
               <div className="space-y-1">
                 {B.T16.data.map((x: any, i: number) => (
@@ -411,7 +470,7 @@ export default function Growth() {
             )}
           </details>
           <details className="bg-white rounded-xl p-4 shadow-sm space-y-2">
-            <summary className="text-sm font-bold text-gray-600">相対筋力（タップで展開）</summary>
+            <summary className="text-sm font-bold text-gray-600" onMouseEnter={() => setDesc('体重あたりの筋力（最大重量÷その時の体重）。体重が減っても同じ重量なら値は上昇=本当の伸び、の読み方ができます。')} onClick={() => setDesc('体重あたりの筋力（最大重量÷その時の体重）。体重が減っても同じ重量なら値は上昇=本当の伸び、の読み方ができます。')}>相対筋力（タップで展開）</summary>
             {B.T17?.status === 'ready' ? (
               <LineChart height={90} points={B.T17.data.series.map((p: any) => ({ date: p.date, value: p.value }))} />
             ) : (
@@ -423,15 +482,27 @@ export default function Growth() {
         </div>
       ) : (
         <div className="space-y-4">
-          <Block b={M.M0} title="トレーニング日vs休息日の摂取">
+          <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">
+            <p className="text-sm font-bold text-gray-600">摂取カロリー（棒）と消費カロリー（線）</p>
+            <ComboChart bars={intakePoints} line={burnLine} />
+            {n.intake && <p className="text-[10px] text-gray-400">{n.intake}</p>}
+          </div>
+          <Block b={M.M6} title="タンパク g/kg 推移" note={`${mn.protein_approx} 目安: 1.6-2.2 g/kg`} desc="体重1kgあたり何gのタンパク質を摂れたか。筋肉づくりの目安です。" {...dp}>
+            {(d: any[]) => <LineChart height={90} points={d.map((p) => ({ date: p.date, value: p.value }))} />}
+          </Block>
+          <Block b={M.M7} title="タンパク20g以上の食事" desc="1食でタンパク質20g以上を摂れた食事の数。展開すると最近の該当食事が表示されます。" {...dp}>
             {(d: any) => (
-              <div className="grid grid-cols-2 gap-2 text-center">
-                <div className="bg-blue-50 rounded-lg p-2"><p className="text-[10px] text-gray-500">トレ日（{d.training_days.days}日）</p><p className="text-sm font-bold">{d.training_days.avg_kcal} kcal / P{d.training_days.avg_protein}g</p></div>
-                <div className="bg-gray-50 rounded-lg p-2"><p className="text-[10px] text-gray-500">休息日（{d.rest_days.days}日）</p><p className="text-sm font-bold">{d.rest_days.avg_kcal} kcal / P{d.rest_days.avg_protein}g</p></div>
+              <div className="space-y-1">
+                <p className="text-lg font-bold">1日平均 {d.avg_per_day}食</p>
+                <details><summary className="text-[10px] text-blue-600">最近の記録（タップで展開）</summary>
+                  <div className="space-y-0.5 mt-1">
+                    {d.recent.map((r: any, i: number) => <p key={i} className="text-[10px] text-gray-500">{r.date}｜{r.menu_name}｜P{r.protein}g</p>)}
+                  </div>
+                </details>
               </div>
             )}
           </Block>
-          <Block b={M.M3} title="食事の時間帯分布" note={mn.meal_time}>
+          <Block b={M.M3} title="食事の時間帯分布" note={mn.meal_time} desc="朝/昼/夕/夜間の食事記録の割合。夜間が多い場合は生活リズムの参考になります。" {...dp}>
             {(d: any) => (
               <div className="space-y-1">
                 <div className="flex h-4 rounded overflow-hidden">
@@ -445,25 +516,25 @@ export default function Growth() {
               </div>
             )}
           </Block>
-          <Block b={M.M4} title="摂取の安定度" note={mn.stability}>
+          <Block b={M.M4} title="摂取の安定度" note={mn.stability} desc="日ごとの摂取カロリーのブレ幅。ブレが小さいほど食事が安定しています。" {...dp}>
             {(d: any) => <p className="text-lg font-bold">±{d.sd_kcal} kcal <span className="text-xs text-gray-500">{d.label}</span></p>}
           </Block>
-          <Block b={M.M6} title="タンパク g/kg 推移" note={`${mn.protein_approx} 目安: 1.6-2.2 g/kg`}>
-            {(d: any[]) => <LineChart height={90} points={d.map((p) => ({ date: p.date, value: p.value }))} />}
-          </Block>
-          <Block b={M.M7} title="タンパク20g以上の食事">
+          <Block b={M.M13} title="記録日数（記録状況）" desc="この期間に何日分の記録があるか。分析の信頼度を判断するための参考表示です。" {...dp}>
             {(d: any) => (
-              <div className="space-y-1">
-                <p className="text-lg font-bold">1日平均 {d.avg_per_day}食</p>
-                <details><summary className="text-[10px] text-blue-600">最近の記録（タップで展開）</summary>
-                  <div className="space-y-0.5 mt-1">
-                    {d.recent.map((r: any, i: number) => <p key={i} className="text-[10px] text-gray-500">{r.date}｜{r.menu_name}｜P{r.protein}g</p>)}
-                  </div>
-                </details>
+              <p className="text-sm font-bold">
+                食事 {d.meal_days}{d.period_days ? `/${d.period_days}` : ''}日／トレ {d.training_days}{d.period_days ? `/${d.period_days}` : ''}日／体重 {d.weight_days}{d.period_days ? `/${d.period_days}` : ''}日
+              </p>
+            )}
+          </Block>
+          <Block b={M.M0} title="トレーニング日vs休息日の摂取" desc="トレ日と休息日で平均摂取カロリーを比較します。運動量に合わせた食事ができているかの参考になります。" {...dp}>
+            {(d: any) => (
+              <div className="grid grid-cols-2 gap-2 text-center">
+                <div className="bg-blue-50 rounded-lg p-2"><p className="text-[10px] text-gray-500">トレ日（{d.training_days.days}日）</p><p className="text-sm font-bold">{d.training_days.avg_kcal} kcal / P{d.training_days.avg_protein}g</p></div>
+                <div className="bg-gray-50 rounded-lg p-2"><p className="text-[10px] text-gray-500">休息日（{d.rest_days.days}日）</p><p className="text-sm font-bold">{d.rest_days.avg_kcal} kcal / P{d.rest_days.avg_protein}g</p></div>
               </div>
             )}
           </Block>
-          <Block b={M.M10} title="長距離日（10km以上）の摂取">
+          <Block b={M.M10} title="長距離日（10km以上）の摂取" desc="10km以上走った日とそれ以外の日で平均摂取カロリーを比較します。ランナーの燃料補給の参考になります。" {...dp}>
             {(d: any) => (
               <div className="grid grid-cols-2 gap-2 text-center">
                 <div className="bg-blue-50 rounded-lg p-2"><p className="text-[10px] text-gray-500">10km↑の日（{d.long_days.days}日）</p><p className="text-sm font-bold">{d.long_days.avg_kcal} kcal</p></div>
@@ -471,21 +542,9 @@ export default function Growth() {
               </div>
             )}
           </Block>
-          <Block b={M.M12} title="タンパク達成日数" note={mn.protein_ref}>
+          <Block b={M.M12} title="タンパク達成日数" note={mn.protein_ref} desc="体重1kgあたり1.6gのタンパク質を摂れた日数。" {...dp}>
             {(d: any) => <p className="text-lg font-bold">{d.achieved_days}日達成 <span className="text-xs text-gray-500">（対象{d.valid_days}日）</span></p>}
           </Block>
-          <Block b={M.M13} title="記録日数（記録状況）">
-            {(d: any) => (
-              <p className="text-sm font-bold">
-                食事 {d.meal_days}{d.period_days ? `/${d.period_days}` : ''}日／トレ {d.training_days}{d.period_days ? `/${d.period_days}` : ''}日／体重 {d.weight_days}{d.period_days ? `/${d.period_days}` : ''}日
-              </p>
-            )}
-          </Block>
-          <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">
-            <p className="text-sm font-bold text-gray-600">摂取カロリー推移 (kcal)</p>
-            <BarChart points={(data.intake_daily || []).map((p: any) => ({ date: p.date, value: p.intake_kcal }))} />
-          </div>
-          {n.intake && <p className="text-[10px] text-gray-400">{n.intake}</p>}
         </div>
       )}
     </div>
