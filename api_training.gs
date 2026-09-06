@@ -8,7 +8,8 @@ function getUserRecord_(userId) {
     userId: userId,
     name: r ? (r['User_Name'] || r['user_name'] || 'ユーザー') : 'ユーザー',
     weight: r ? toNumber_(r['weight'], null) : null,
-    height: r ? toNumber_(r['height'], null) : null,   // ←追加    targetCalories: r ? toNumber_(r['target_calories'], 2000) : 2000,
+    height: r ? toNumber_(r['height'], null) : null,   // ←追加    
+    targetCalories: r ? toNumber_(r['target_calories'], null) : null,   // ←追加
     isPremium: r ? toBool_(r['is_premium']) : false
   };
 }
@@ -824,6 +825,7 @@ function dispatchTraining(userId, action, params) {
     case 'getMenuTrajectory': return apiGetMenuTrajectory(userId, params);
     case 'getMealAnalysis': return apiGetMealAnalysis(userId, params);
     case 'getBodyAnalysis': return apiGetBodyAnalysis(userId, params);
+    case 'getNutritionAnalysis': return apiGetNutritionAnalysis(userId, params);
     default: return { ok: false, error: { code: 'NOT_FOUND', message: 'Unknown action: ' + action } };
   }
 }
