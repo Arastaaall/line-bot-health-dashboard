@@ -77,8 +77,10 @@ function nfReferences_(gender, age) {
       Number(r['age_min']) === band[0] && Number(r['age_max']) === band[1];
   });
   const map = {};
-  rows.forEach(function (r) {
-    map[String(r['nutrient_id']).split('_')[0]] = {
+    rows.forEach(function (r) {
+      // nutrient_id = <key>_<性別>_<ageMin>_<ageMax>。key自体が'_'を含むため末尾3セグメントのみ除去
+      const parts = String(r['nutrient_id']).split('_');
+      map[parts.slice(0, Math.max(parts.length - 3, 1)).join('_')] = {
       value: Number(r['reference_value']), type: String(r['reference_type']),
       unit: String(r['unit']), name: String(r['nutrient_name'])
     };
