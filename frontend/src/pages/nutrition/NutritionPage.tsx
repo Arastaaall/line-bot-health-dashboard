@@ -3,6 +3,7 @@ import { callApi } from '../../services/api';
 import Loading from '../../components/Loading';
 import PeriodPills from './components/PeriodPills';
 import AnalysisTab from './AnalysisTab';
+import HistoryTab from './HistoryTab';
 
 export default function NutritionPage() {
   const [tab, setTab] = useState<'analysis' | 'history'>('analysis');
@@ -37,7 +38,7 @@ export default function NutritionPage() {
       <PeriodPills range={range} onChange={setRange} isFree={isFree} />
       {isFree && <p className="text-[10px] text-gray-400">無料プランは直近7日のみ表示。PROで全期間開放。</p>}
       {error && <p className="text-rose-600 text-sm">エラー: {error}</p>}
-      {loading ? <Loading /> : tab === 'analysis' ? <AnalysisTab data={data} /> : <p className="text-xs text-gray-400">履歴は次ステップで追加されます</p>}
+      {loading ? <Loading /> : tab === 'analysis' ? <AnalysisTab data={data} /> : <HistoryTab range={range} />}
     </div>
   );
 }

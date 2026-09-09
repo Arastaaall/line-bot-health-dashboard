@@ -210,3 +210,114 @@ function buildNutritionAnalysis_(userId, range) {
     }
   };
 }
+
+// ===== Phase 5: 食事履歴（read-only） =====
+
+function nfFormatTs_(d) {
+  return Utilities.formatDate(new Date(d), 'Asia/Tokyo', "yyyy-MM-dd'T'HH:mm:ss'+09:00'");
+}
+
+function apiGetFoodHistory(userId, params) {
+  const user = getUserRecord_(userId);
+  const range = String(params.range || '7d');
+  if (['7d', '30d', '90d', '1y', 'all'].indexOf(range) === -1) {
+    return { ok: false, error: { code: 'VALIDATION_ERROR', message: 'rangeが不正です' } };
+  }
+  const effRange = user.isPremium ? range : '7d';
+  const tier = user.isPremium ? 'p' : 'f';
+  const data = cached_('foodhist_' + userId + '_' + effRange + '_' + tier, 120, function () {
+    const b = nfBounds_(effRange);
+    return {
+      range: effRange,
+      days: nfDailyMealSummary_(userId, b.from, b.to).map(function (d) {
+        return { date: d.date, meals_count: d.meals_count, calories: d.calories, protein: Math.round(d.protein * 10) / 10 };
+      })
+    };
+  });
+  return { ok: true, data: data };
+}
+
+function apiGetFoodDay(userId, params) {
+  const user = getUserRecord_(userId);
+  const date = String(params.date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return { ok: false, error: { code: 'VALIDATION_ERROR', message: 'date形式が不正です' } };
+  }
+  if (!user.isPremium) {
+    const b = nfBounds_('7d');
+    if (date < b.from || date > b.to) {
+      return { ok: false, error: { code: 'NOT_FOUND', message: '無料プランの期間外です' } };
+    }
+  }
+  const tier = user.isPremium ? 'p' : 'f';
+  const data = cached_('foodday_' + userId + '_' + date + '_' + tier, 60, function () {
+    const rows = getRows('logs', function (r) {
+      return String(r['user_id']) === String(userId) && dateKeyOf_(new Date(r['timestamp'])) === date;
+    }).sort(function (a, b) {
+      const ta = new Date(a['timestamp']).getTime();
+      const tb = new Date(b['timestamp']).getTime();
+      if (ta !== tb) return ta - tb;
+      return String(a['log_id'] || '').localeCompare(String(b['log_id'] || ''));
+    });
+    return {
+      date: date,
+      status: rows.length ? 'ok' : 'empty',
+      meals: rows.map(function (r) {
+        return {
+          timestamp: nfFormatTs_(r['timestamp']),
+          menu_name: String(r['menu_name'] || ''),
+          calories: Number(r['calories']) || 0,
+          protein: Math.round((Number(r['protein']) || 0) * 10) / 10,
+          fat: Math.round((Number(r['fat']) || 0) * 10) / 10,
+          carbs: Math.round((Number(r['carbs']) || 0) * 10) / 10,
+          advice: String(r['advice'] || '')
+        };
+      })
+    };
+  });
+  return { ok: true, data: data };
+}
+
+// 一時スモーク（完了後削除）
+function __phase45Step5() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const uSheet = ss.getSheetByName('users');
+  const u = uSheet.getDataRange().getValues();
+  const uidIdx = u[0].indexOf('user_id');
+  const premIdx = u[0].indexOf('is_premium');
+  let row = -1;
+  for (let i = 1; i < u.length; i++) { if (u[i][uidIdx]) { row = i; break; } }
+  const userId = String(u[row][uidIdx]);
+  const origPrem = u[row][premIdx];
+  const sheets = ['users', 'logs', 'Body_Composition', 'Training_Logs'];
+  const before = sheets.map(function (n) { return ss.getSheetByName(n).getLastRow(); }).join(',');
+
+  const bad = apiGetFoodHistory(userId, { range: '10d' });
+  Logger.log('T_hist_invalid=' + (bad.ok === false && bad.error.code === 'VALIDATION_ERROR' ? 'PASS' : 'FAIL'));
+
+  uSheet.getRange(row + 1, premIdx + 1).setValue(true);
+  const h90 = apiGetFoodHistory(userId, { range: '90d' }).data;
+  Logger.log('T_hist_asc=' + (h90.days.every(function (d, i) { return i === 0 || h90.days[i - 1].date <= d.date; }) ? 'PASS' : 'FAIL') + ' days=' + h90.days.length);
+
+  const multi = h90.days.filter(function (d) { return d.meals_count >= 2; })[0];
+  if (multi) {
+    const day = apiGetFoodDay(userId, { date: multi.date }).data;
+    Logger.log('T_day_sort=' + (day.meals.every(function (m, i) { return i === 0 || day.meals[i - 1].timestamp <= m.timestamp; }) ? 'PASS' : 'FAIL') + ' meals=' + day.meals.length);
+  } else {
+    Logger.log('T_day_sort=SKIP');
+  }
+
+  const old = new Date(); old.setDate(old.getDate() - 30);
+  const oldKey = dateKeyOf_(old);
+  uSheet.getRange(row + 1, premIdx + 1).setValue(false);
+  const denied = apiGetFoodDay(userId, { date: oldKey });
+  Logger.log('T_free_denied=' + (denied.ok === false && denied.error.code === 'NOT_FOUND' ? 'PASS' : 'FAIL'));
+  uSheet.getRange(row + 1, premIdx + 1).setValue(true);
+  const allowed = apiGetFoodDay(userId, { date: oldKey });
+  Logger.log('T_pro_allowed=' + (allowed.ok === true ? 'PASS' : 'FAIL'));
+  uSheet.getRange(row + 1, premIdx + 1).setValue(origPrem);
+
+  const after = sheets.map(function (n) { return ss.getSheetByName(n).getLastRow(); }).join(',');
+  Logger.log('T_readonly=' + (before === after ? 'PASS' : 'FAIL'));
+  Logger.log('step5_end');
+}

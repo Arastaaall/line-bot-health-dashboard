@@ -826,6 +826,8 @@ function dispatchTraining(userId, action, params) {
     case 'getMealAnalysis': return apiGetMealAnalysis(userId, params);
     case 'getBodyAnalysis': return apiGetBodyAnalysis(userId, params);
     case 'getNutritionAnalysis': return apiGetNutritionAnalysis(userId, params);
+    case 'getFoodHistory': return apiGetFoodHistory(userId, params);
+    case 'getFoodDay': return apiGetFoodDay(userId, params);
     default: return { ok: false, error: { code: 'NOT_FOUND', message: 'Unknown action: ' + action } };
   }
 }
