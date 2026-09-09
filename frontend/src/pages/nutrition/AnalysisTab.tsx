@@ -24,6 +24,12 @@ export default function AnalysisTab({ data }: { data: any }) {
         ) : <Insufficient b={n1} />}
         {data.notes?.pfc && <p className="text-[10px] text-gray-400">{data.notes.pfc}</p>}
         {data.notes?.recorded_days && <p className="text-[10px] text-gray-400">{data.notes.recorded_days}</p>}
+        {data.notes?.protein_bcaa_note && (
+          <details>
+            <summary className="text-[10px] text-blue-600">タンパク質とBCAAについて（タップで展開）</summary>
+            <p className="text-[10px] text-gray-400 mt-1">{data.notes.protein_bcaa_note}</p>
+          </details>
+        )}
       </div>
 
       <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">

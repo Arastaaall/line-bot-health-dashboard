@@ -120,7 +120,7 @@ function nfDailyMealSummary_(userId, fromKey, toKey) {
   rows.forEach(function (r) {
     const k = dateKeyOf_(new Date(r['timestamp']));
     if ((fromKey && k < fromKey) || k > toKey) return;
-    if (!days[k]) days[k] = { date: k, meals_count: 0, calories: 0, protein: 0, fat: 0, carbs: 0, fiber: 0, calcium: 0, iron: 0, potassium: 0, magnesium: 0, zinc: 0, vit_a: 0, vit_c: 0 };
+    if (!days[k]) days[k] = { date: k, meals_count: 0, calories: 0, protein: 0, fat: 0, carbs: 0, fiber: 0, calcium: 0, iron: 0, potassium: 0, magnesium: 0, zinc: 0, vit_a: 0, vit_c: 0, vit_d: 0, vit_e: 0, vit_b1: 0, vit_b2: 0, vit_b6: 0, vit_b12: 0, folate: 0 };
     const d = days[k];
     d.meals_count += 1;
     d.calories += Number(r['calories']) || 0;
@@ -135,6 +135,13 @@ function nfDailyMealSummary_(userId, fromKey, toKey) {
     d.zinc += Number(r['zinc']) || 0;
     d.vit_a += Number(r['vit_a']) || 0;
     d.vit_c += Number(r['vit_c']) || 0;
+    d.vit_d += Number(r['vit_d']) || 0;
+    d.vit_e += Number(r['vit_e']) || 0;
+    d.vit_b1 += Number(r['vit_b1']) || 0;
+    d.vit_b2 += Number(r['vit_b2']) || 0;
+    d.vit_b6 += Number(r['vit_b6']) || 0;
+    d.vit_b12 += Number(r['vit_b12']) || 0;
+    d.folate += Number(r['folate']) || 0;
   });
   return Object.keys(days).sort().map(function (k) { return days[k]; });
 }

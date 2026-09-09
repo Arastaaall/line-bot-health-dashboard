@@ -140,9 +140,11 @@ function buildNutritionAnalysis_(userId, range) {
   else {
     const refs = nfReferences_(profile.gender, profile.age);
     const list = [];
-    ['fiber', 'calcium', 'iron', 'potassium', 'magnesium', 'zinc', 'vit_a', 'vit_c'].forEach(function (k) {
+    ['fiber', 'calcium', 'iron', 'potassium', 'magnesium', 'zinc', 'vit_a', 'vit_c', 'vit_d', 'vit_e', 'vit_b1', 'vit_b2', 'vit_b6', 'vit_b12', 'folate'].forEach(function (k) {
       const ref = refs[k];
-      const avg = days.reduce(function (s, d) { return s + (d[k] || 0); }, 0) / recorded;
+      const avgRaw = days.reduce(function (s, d) { return s + (d[k] || 0); }, 0) / recorded;
+      // vit_a: Logs保存はIU・基準値はµgRAEのため換算（1µgRAE=3.33IU・MHLW p.181脚注）
+      const avg = (k === 'vit_a') ? avgRaw / 3.33 : avgRaw;
       const raw = ref && ref.value > 0 ? (avg / ref.value) * 100 : 0;
       list.push({
         key: k, name: ref ? ref.name : k,
@@ -206,7 +208,8 @@ function buildNutritionAnalysis_(userId, range) {
       reference: '栄養基準値は成人向けの一般的な目安であり、医学的な診断・保証を行うものではありません。年齢や体質による個人差があります。',
       no_record: '記録がない日は、食べていないことを意味しません。',
       pfc: 'PFC比は食事記録から算出した参考値です。',
-      recorded_days: '平均値は記録がある日数を基準に算出しています。'
+      recorded_days: '平均値は記録がある日数を基準に算出しています。',
+      protein_bcaa_note: 'BCAA（ロイシン・イソロイシン・バリン）はタンパク質に含まれるアミノ酸です。若年成人では1回あたりのロイシン量と筋タンパク合成の相関は明確でなく、総タンパク質量（目安 約2g/kg/日）が土台です。高齢になるほどアミノ酸への筋の反応が鈍くなるため、1回あたりの量の重要性が上がります。サプリメントは総エネルギーとマクロ栄養素が整った後の補完的位置づけです。本表示は参考情報であり、医学的・効果の保証ではありません。'
     }
   };
 }
@@ -276,48 +279,4 @@ function apiGetFoodDay(userId, params) {
     };
   });
   return { ok: true, data: data };
-}
-
-// 一時スモーク（完了後削除）
-function __phase45Step5() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const uSheet = ss.getSheetByName('users');
-  const u = uSheet.getDataRange().getValues();
-  const uidIdx = u[0].indexOf('user_id');
-  const premIdx = u[0].indexOf('is_premium');
-  let row = -1;
-  for (let i = 1; i < u.length; i++) { if (u[i][uidIdx]) { row = i; break; } }
-  const userId = String(u[row][uidIdx]);
-  const origPrem = u[row][premIdx];
-  const sheets = ['users', 'logs', 'Body_Composition', 'Training_Logs'];
-  const before = sheets.map(function (n) { return ss.getSheetByName(n).getLastRow(); }).join(',');
-
-  const bad = apiGetFoodHistory(userId, { range: '10d' });
-  Logger.log('T_hist_invalid=' + (bad.ok === false && bad.error.code === 'VALIDATION_ERROR' ? 'PASS' : 'FAIL'));
-
-  uSheet.getRange(row + 1, premIdx + 1).setValue(true);
-  const h90 = apiGetFoodHistory(userId, { range: '90d' }).data;
-  Logger.log('T_hist_asc=' + (h90.days.every(function (d, i) { return i === 0 || h90.days[i - 1].date <= d.date; }) ? 'PASS' : 'FAIL') + ' days=' + h90.days.length);
-
-  const multi = h90.days.filter(function (d) { return d.meals_count >= 2; })[0];
-  if (multi) {
-    const day = apiGetFoodDay(userId, { date: multi.date }).data;
-    Logger.log('T_day_sort=' + (day.meals.every(function (m, i) { return i === 0 || day.meals[i - 1].timestamp <= m.timestamp; }) ? 'PASS' : 'FAIL') + ' meals=' + day.meals.length);
-  } else {
-    Logger.log('T_day_sort=SKIP');
-  }
-
-  const old = new Date(); old.setDate(old.getDate() - 30);
-  const oldKey = dateKeyOf_(old);
-  uSheet.getRange(row + 1, premIdx + 1).setValue(false);
-  const denied = apiGetFoodDay(userId, { date: oldKey });
-  Logger.log('T_free_denied=' + (denied.ok === false && denied.error.code === 'NOT_FOUND' ? 'PASS' : 'FAIL'));
-  uSheet.getRange(row + 1, premIdx + 1).setValue(true);
-  const allowed = apiGetFoodDay(userId, { date: oldKey });
-  Logger.log('T_pro_allowed=' + (allowed.ok === true ? 'PASS' : 'FAIL'));
-  uSheet.getRange(row + 1, premIdx + 1).setValue(origPrem);
-
-  const after = sheets.map(function (n) { return ss.getSheetByName(n).getLastRow(); }).join(',');
-  Logger.log('T_readonly=' + (before === after ? 'PASS' : 'FAIL'));
-  Logger.log('step5_end');
 }
