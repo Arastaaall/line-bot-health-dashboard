@@ -160,3 +160,52 @@ function apiGetGoalPlans(userId, params) {
   });
   return { ok: true, data: data };
 }
+
+// ==========================================
+// Phase 7 修正: 共通キャッシュ経路の統一
+// ==========================================
+
+// 1. 共通キャッシュ経由でGoal_Plansを取得する内部ヘルパー
+function getGoalPlansCached_(userId) {
+  const user = getUserRecord_(userId);
+  const tier = user.isPremium ? 'p' : 'f';
+  // 既存の cached_ 関数（CacheService.getUserCache()を使用）とキー形式を統一
+  return cached_('goalplans_' + userId + '_' + tier, 120, function () {
+    return getGoalPlans_(userId);
+  });
+}
+
+// 2. 目標期間終了バナーを生成する共通ヘルパー
+function buildGoalPeriodBanner_(userId) {
+  const gp = getGoalPlansCached_(userId);
+  const active = gp && gp.active_plan;
+  if (!active) return { show: false, message: '' };
+  
+  const endKey = String(active['planned_end_date'] || '').slice(0, 10);
+  if (!endKey) return { show: false, message: '' };
+  
+  const show = todayKey_() > endKey; // 終了日当日は非表示
+  return { 
+    show: show, 
+    message: show ? '目標期間が終了しています。現在の体重・体組成を確認し、必要に応じて目標を更新してください。' : '' 
+  };
+}
+
+// 3. 既存の apiGetGoalPlans を共通キャッシュ経由に簡素化
+function apiGetGoalPlans(userId, params) {
+  return { ok: true, data: getGoalPlansCached_(userId) };
+}
+
+// 4. キャッシュ無効化ヘルパー（将来のPlan更新/削除時に呼び出す）
+function invalidateGoalPlanCaches_(userId) {
+  const cache = CacheService.getUserCache(); // cached_関数と同一ストアを使用
+  const keys = [];
+  ['p', 'f'].forEach(function (t) {
+    keys.push('goalplans_' + userId + '_' + t);
+    ['7d', '30d', '90d', '1y', 'all'].forEach(function (r) {
+      keys.push('growth_' + userId + '_' + r + '_' + t);
+      keys.push('growth_meal_' + userId + '_' + r + '_' + t);
+    });
+  });
+  keys.forEach(function(k) { cache.remove(k); });
+}

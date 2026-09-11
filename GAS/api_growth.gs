@@ -1,14 +1,7 @@
 // api_growth.gs
 
-// 軽量化: 同一実行内でのGoal_Plans複数回読み込みを防ぐためのインメモリキャッシュ
-let __cachedGoalPlans = {};
-function getGoalPlansCachedLocally_(userId) {
-  if (__cachedGoalPlans[userId]) return __cachedGoalPlans[userId];
-  const plans = getGoalPlansCachedLocally_(userId);
-  __cachedGoalPlans[userId] = plans;
-  return plans;
-}
- — Phase 6 成長の記録（読取専用: append/update/deleteは一切不使用）
+// api_growth.gs
+// Phase 6 成長の記録（読取専用: append/update/deleteは一切不使用）
 
 function apiGetGrowthSummary(userId, params) {
   const user = getUserRecord_(userId);
@@ -219,7 +212,7 @@ function buildGrowthSummary_(userId, range, isPremium) {
   });
 
   // ---- goal_period_banner ----
-  const goalPlans = getGoalPlansCachedLocally_(userId);
+  const goalPlans = getGoalPlansCached_(userId);
   const activePlan = goalPlans ? goalPlans.active_plan : null;
   let goalBanner = { show: false, message: '' };
   if (activePlan && activePlan.planned_end_date) {
@@ -1047,7 +1040,7 @@ function buildMealAnalysis_(userId, range) {
 
   // M5 目標対比（Goal Plans対比）
   (function () {
-    const goalPlans = getGoalPlansCachedLocally_(userId);
+    const goalPlans = getGoalPlansCached_(userId);
     const activePlan = goalPlans ? goalPlans.active_plan : null;
     if (!activePlan) {
       blocks['M5'] = { status: 'insufficient', message: '目標プランが設定されていません', code: 'no_active_plan' };

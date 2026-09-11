@@ -196,7 +196,10 @@ function apiGetTrainingLogDetail(userId, params) {
 
 function apiGetDashboardAll(userId, params) {
   const training = apiGetTrainingAnalysis(userId, { range: '7d' }).data;
-  const growthSummary = apiGetGrowthSummary(userId, { range: '7d' }).data;
+  
+  // 【修正点】 apiGetGrowthSummary を呼ばず、軽量なバナー専用関数を使用
+  const goalBanner = buildGoalPeriodBanner_(userId);
+  
   return {
     ok: true,
     data: {
@@ -207,7 +210,7 @@ function apiGetDashboardAll(userId, params) {
         D2: training.blocks.D2,
         R2: training.blocks.R2
       },
-      goal_banner: growthSummary ? growthSummary.goal_period_banner : null
+      goal_banner: goalBanner
     }
   };
 }

@@ -1,0 +1,14 @@
+# フロントエンド全体を除外
+frontend/
+
+# Git関連を除外
+.git/
+.gitignore
+
+# 設定ファイル・ログを除外
+.clasp.json
+status_log.txt
+*.txt.bac
+
+# その他
+node_modules/
