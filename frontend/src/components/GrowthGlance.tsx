@@ -1,13 +1,5 @@
-import { useEffect, useState } from 'react';
-import { callApi } from '../services/api';
-
-export default function GrowthGlance() {
-  const [b, setB] = useState<any>(null);
-  useEffect(() => {
-    callApi('getTrainingAnalysis', { range: '7d' })
-      .then((d: any) => setB(d.blocks))
-      .catch(() => {});
-  }, []);
+export default function GrowthGlance({ data }: { data?: any }) {
+  const b = data;
   if (!b) return null;
   return (
     <div className="space-y-2">

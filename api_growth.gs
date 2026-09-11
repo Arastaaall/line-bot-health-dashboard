@@ -1,4 +1,14 @@
-// api_growth.gs — Phase 6 成長の記録（読取専用: append/update/deleteは一切不使用）
+// api_growth.gs
+
+// 軽量化: 同一実行内でのGoal_Plans複数回読み込みを防ぐためのインメモリキャッシュ
+let __cachedGoalPlans = {};
+function getGoalPlansCachedLocally_(userId) {
+  if (__cachedGoalPlans[userId]) return __cachedGoalPlans[userId];
+  const plans = getGoalPlansCachedLocally_(userId);
+  __cachedGoalPlans[userId] = plans;
+  return plans;
+}
+ — Phase 6 成長の記録（読取専用: append/update/deleteは一切不使用）
 
 function apiGetGrowthSummary(userId, params) {
   const user = getUserRecord_(userId);
@@ -11,6 +21,22 @@ function apiGetGrowthSummary(userId, params) {
     return buildGrowthSummary_(userId, range, user.isPremium);
   });
   return { ok: true, data: data };
+}
+
+// 成長画面は同じrangeの4分析をまとめて返し、認証・HTTP往復を1回にする。
+// 各分析は既存の個別キャッシュを利用するため、既存actionの契約は変更しない。
+function apiGetGrowthAll(userId, params) {
+  const range = params && params.range ? params.range : '7d';
+  return {
+    ok: true,
+    data: {
+      summary: apiGetGrowthSummary(userId, { range: range }).data,
+      training: apiGetTrainingAnalysis(userId, { range: range }).data,
+      meal: apiGetMealAnalysis(userId, { range: range }).data,
+      body: apiGetBodyAnalysis(userId, { range: range }).data,
+      menus: apiGetTrainingMenus(userId, {}).data
+    }
+  };
 }
 
 function buildGrowthSummary_(userId, range, isPremium) {
@@ -192,6 +218,20 @@ function buildGrowthSummary_(userId, range, isPremium) {
     return { date: k, intake_kcal: iMap[k] || 0 };
   });
 
+  // ---- goal_period_banner ----
+  const goalPlans = getGoalPlansCachedLocally_(userId);
+  const activePlan = goalPlans ? goalPlans.active_plan : null;
+  let goalBanner = { show: false, message: '' };
+  if (activePlan && activePlan.planned_end_date) {
+    const endStr = String(activePlan.planned_end_date).slice(0, 10);
+    if (endStr && to > endStr) {
+      goalBanner = {
+        show: true,
+        message: '目標期間が終了しています。現在の体重・体組成を確認し、必要に応じて目標を更新してください。'
+      };
+    }
+  }
+
   return {
     range: { from: from, to: to },
     plan_limits: { range_days: isPremium ? null : 7 },
@@ -204,12 +244,14 @@ function buildGrowthSummary_(userId, range, isPremium) {
     training_totals: trainingTotals,
     exercise_stats: exerciseStats,
     intake_daily: intakeDaily,
+    goal_period_banner: goalBanner,
     notes: {
       volume: 'トレーニングボリュームは重量×回数から算出した参考値です。負荷の高さそのものを示す指標ではありません（例: 60kg×10回×3セットより100kg×5回×3セットの方が高強度な場合があります）。',
       bodyweight: '自重種目は重量を記録しないため、ボリュームには含まれません。回数・セット数は集計されます。',
       bodycomp: '測定した日の値を表示しています。測定していない日の変化は表示していません。体組成の値は測定条件によって変動するため、長期的な傾向を見るための参考値です。',
       exercise: '推定消費カロリーは参考値の合計です。実際の消費カロリーとは異なる場合があります。',
-      intake: '摂取と運動消費は相殺されません。'
+      intake: '摂取と運動消費は相殺されません。',
+      disclaimer: '目標達成度および表示は現在設定されている目標プランに基づく参考値です。'
     }
   };
 }
@@ -1003,13 +1045,86 @@ function buildMealAnalysis_(userId, range) {
     ready('M13', { period_days: periodDays, meal_days: dayKeys.length, training_days: trDays, weight_days: bwDays });
   })();
 
+  // M5 目標対比（Goal Plans対比）
+  (function () {
+    const goalPlans = getGoalPlansCachedLocally_(userId);
+    const activePlan = goalPlans ? goalPlans.active_plan : null;
+    if (!activePlan) {
+      blocks['M5'] = { status: 'insufficient', message: '目標プランが設定されていません', code: 'no_active_plan' };
+      return;
+    }
+    const planStart = String(activePlan['start_date'] || '').slice(0, 10);
+    const winFrom = (b.from && planStart) ? (planStart > b.from ? planStart : b.from) : (planStart || b.from);
+    const winTo = b.to;
+    
+    if (!winFrom || winFrom > winTo) { insuff('M5'); return; }
+
+    const targetKcal = toNumber_(activePlan['planned_target_calories'], null);
+    if (!targetKcal || targetKcal <= 0) { insuff('M5'); return; }
+
+    const dates = [];
+    const cur = new Date(winFrom + 'T00:00:00');
+    const end = new Date(winTo + 'T00:00:00');
+    while (cur <= end) {
+      dates.push(dateKeyOf_(cur));
+      cur.setDate(cur.getDate() + 1);
+    }
+    const validDays = dates.length;
+    if (validDays === 0) { insuff('M5'); return; }
+
+    const winDayMap = {};
+    let totalIntake = 0;
+    let recordedDays = 0;
+    mLogs.forEach(function(r) {
+      const k = dateKeyOf_(new Date(r['timestamp']));
+      if (k >= winFrom && k <= winTo) {
+        winDayMap[k] = (winDayMap[k] || 0) + (Number(r['calories']) || 0);
+      }
+    });
+
+    dates.forEach(function(k) {
+      const c = winDayMap[k] || 0;
+      if (c > 0) recordedDays += 1;
+      totalIntake += c;
+    });
+
+    if (recordedDays < 3) { insuff('M5'); return; }
+
+    const avgIntake = Math.round(totalIntake / validDays);
+    const ratio = Math.round((avgIntake / targetKcal) * 100);
+    const displayRatio = Math.min(ratio, 200);
+
+    let underDays = 0, withinDays = 0, overDays = 0;
+    dates.forEach(function(k) {
+      const c = winDayMap[k] || 0;
+      const r = (c / targetKcal) * 100;
+      if (r < 90) underDays += 1;
+      else if (r <= 110) withinDays += 1;
+      else overDays += 1;
+    });
+
+    ready('M5', {
+      active_plan: activePlan,
+      valid_days: validDays,
+      recorded_days: recordedDays,
+      avg_intake: avgIntake,
+      target_calories: targetKcal,
+      ratio: ratio,
+      display_ratio: displayRatio,
+      under_days: underDays,
+      within_days: withinDays,
+      over_days: overDays
+    });
+  })();
+
   return {
     range: range,
     notes: {
       meal_time: '時間帯の分類は記録された時刻を基準としています。',
       stability: '表示区分（±200/400 kcal）は本アプリ内の変動幅を直感的に把握するための表示基準であり、医学・栄養学上の標準的な閾値ではありません。',
       protein_approx: 'タンパクg/kgは体重測定日の間は直近測定値を使用した近似値です。',
-      protein_ref: '1日1.6g/kgを目安として集計した参考値です。'
+      protein_ref: '1日1.6g/kgを目安として集計した参考値です。',
+      goal_disclaimer: '目標比は現在設定されている目標プランに基づく参考値です。'
     },
     blocks: blocks
   };

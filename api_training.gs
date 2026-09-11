@@ -195,11 +195,19 @@ function apiGetTrainingLogDetail(userId, params) {
 }
 
 function apiGetDashboardAll(userId, params) {
+  const training = apiGetTrainingAnalysis(userId, { range: '7d' }).data;
+  const growthSummary = apiGetGrowthSummary(userId, { range: '7d' }).data;
   return {
     ok: true,
     data: {
       summary: apiGetDailyCalorieSummary(userId, params).data,
-      dashboard: getDashboardDataCached(userId)
+      dashboard: getDashboardDataCached(userId),
+      glance: {
+        D1: training.blocks.D1,
+        D2: training.blocks.D2,
+        R2: training.blocks.R2
+      },
+      goal_banner: growthSummary ? growthSummary.goal_period_banner : null
     }
   };
 }
@@ -821,11 +829,13 @@ function dispatchTraining(userId, action, params) {
     case 'createBodyCompositionLog': return apiCreateBodyCompositionLog(userId, params);
     case 'deleteBodyCompositionLog': return apiDeleteBodyCompositionLog(userId, params);
     case 'getGrowthSummary': return apiGetGrowthSummary(userId, params);
+    case 'getGrowthAll': return apiGetGrowthAll(userId, params);
     case 'getTrainingAnalysis': return apiGetTrainingAnalysis(userId, params);
     case 'getMenuTrajectory': return apiGetMenuTrajectory(userId, params);
     case 'getMealAnalysis': return apiGetMealAnalysis(userId, params);
     case 'getBodyAnalysis': return apiGetBodyAnalysis(userId, params);
     case 'getNutritionAnalysis': return apiGetNutritionAnalysis(userId, params);
+    case 'getGoalPlans': return apiGetGoalPlans(userId, params);
     case 'getFoodHistory': return apiGetFoodHistory(userId, params);
     case 'getFoodDay': return apiGetFoodDay(userId, params);
     default: return { ok: false, error: { code: 'NOT_FOUND', message: 'Unknown action: ' + action } };

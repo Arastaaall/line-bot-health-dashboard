@@ -6,44 +6,103 @@
 function seedNutritionReference() {
   const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Nutrition_Reference');
   const existing = sh.getDataRange().getValues();
-  if (existing.length - 1 > 0) { Logger.log('seed skipped: rows=' + (existing.length - 1)); return; }
+  if (existing.length - 1 === 0) {
+    const SRC = 'MHLW日本人の食事摂取基準2025年版';
+    const T = [
+      ['fiber', '食物繊維', 'g', '目標量', 'p.144', [20, 22, 22], [18, 18, 18]],
+      ['calcium', 'カルシウム', 'mg', '推奨量', 'p.283', [800, 750, 750], [650, 650, 650]],
+      ['iron', '鉄', 'mg', '推奨量', 'p.345', [7.0, 7.5, 7.0], [10.0, 10.5, 6.0]],
+      ['potassium', 'カリウム', 'mg', '目標量', 'p.282', [3000, 3000, 3000], [2600, 2600, 2600]],
+      ['magnesium', 'マグネシウム', 'mg', '推奨量', 'p.284', [340, 380, 370], [280, 290, 290]],
+      ['zinc', '亜鉛', 'mg', '推奨量', 'p.346', [9.0, 9.5, 9.5], [7.5, 8.0, 8.0]],
+      ['vit_a', 'ビタミンA', 'µgRAE', '推奨量', 'p.181', [850, 900, 900], [650, 700, 700]],
+      ['vit_c', 'ビタミンC', 'mg', '推奨量', 'p.242', [100, 100, 100], [100, 100, 100]]
+    ];
+    const bands = [[18, 29], [30, 49], [50, 64]];
+    const rows = [];
+    T.forEach(function (t) {
+      ['男性', '女性'].forEach(function (g, gi) {
+        bands.forEach(function (b, bi) {
+          rows.push({
+            nutrient_id: t[0] + '_' + g + '_' + b[0] + '_' + b[1],
+            nutrient_name: t[1],
+            unit: t[2],
+            gender: g,
+            age_min: b[0],
+            age_max: b[1],
+            reference_type: t[3],
+            reference_value: (gi === 0 ? t[5] : t[6])[bi],
+            calculation_type: 'fixed',
+            source: SRC,
+            source_year: 2025,
+            note: t[4] + (t[0] === 'iron' && g === '女性' ? (bi < 2 ? '（月経あり値）' : '（月経なし値）') : ''),
+            is_active: true
+          });
+        });
+      });
+    });
+    appendRowsObjs('Nutrition_Reference', rows);
+    Logger.log('base seed done: rows=' + rows.length);
+  } else {
+    Logger.log('base seed skipped: rows=' + (existing.length - 1));
+  }
+  seedVitamins2025b();
+}
 
+// Phase 4.1: ビタミンD/E/B1/B2/B6/B12/葉酸の不足分だけ追加する冪等シード。
+function seedVitamins2025b() {
+  const existing = {};
+  getRows('Nutrition_Reference').forEach(function (r) {
+    existing[String(r['nutrient_id'])] = true;
+  });
   const SRC = 'MHLW日本人の食事摂取基準2025年版';
-  const T = [
-    ['fiber', '食物繊維', 'g', '目標量', 'p.144', [20, 22, 22], [18, 18, 18]],
-    ['calcium', 'カルシウム', 'mg', '推奨量', 'p.283', [800, 750, 750], [650, 650, 650]],
-    ['iron', '鉄', 'mg', '推奨量', 'p.345', [7.0, 7.5, 7.0], [10.0, 10.5, 6.0]],
-    ['potassium', 'カリウム', 'mg', '目標量', 'p.282', [3000, 3000, 3000], [2600, 2600, 2600]],
-    ['magnesium', 'マグネシウム', 'mg', '推奨量', 'p.284', [340, 380, 370], [280, 290, 290]],
-    ['zinc', '亜鉛', 'mg', '推奨量', 'p.346', [9.0, 9.5, 9.5], [7.5, 8.0, 8.0]],
-    ['vit_a', 'ビタミンA', 'µgRAE', '推奨量', 'p.181', [850, 900, 900], [650, 700, 700]],
-    ['vit_c', 'ビタミンC', 'mg', '推奨量', 'p.242', [100, 100, 100], [100, 100, 100]]
-  ];
   const bands = [[18, 29], [30, 49], [50, 64]];
+  const specs = [
+    ['vit_d', 'ビタミンD', 'µg', '目安量', '1µg=40IU / p.182', [9, 9, 9], [9, 9, 9]],
+    ['vit_e', 'ビタミンE', 'mg', '目安量', 'p.183', [6.5, 6.5, 6.5], [5, 6, 6]],
+    ['vit_b1', 'ビタミンB1', 'mg', '推奨量', 'p.234', [1.1, 1.2, 1.1], [0.8, 0.9, 0.8]],
+    ['vit_b2', 'ビタミンB2', 'mg', '推奨量', 'p.235', [1.6, 1.7, 1.6], [1.2, 1.2, 1.2]],
+    ['vit_b6', 'ビタミンB6', 'mg', '推奨量', 'p.237', [1.5, 1.5, 1.5], [1.2, 1.2, 1.2]],
+    ['vit_b12', 'ビタミンB12', 'µg', '目安量', 'シアノコバラミン相当 / p.238', [4, 4, 4], [4, 4, 4]],
+    ['folate', '葉酸', 'µg', '推奨量', '食事由来値 / p.239', [240, 240, 240], [240, 240, 240]]
+  ];
   const rows = [];
-  T.forEach(function (t) {
-     ['男性', '女性'].forEach(function (g, gi) {
+  specs.forEach(function (s) {
+    ['男性', '女性'].forEach(function (g, gi) {
       bands.forEach(function (b, bi) {
+        const id = s[0] + '_' + g + '_' + b[0] + '_' + b[1];
+        if (existing[id]) return;
         rows.push({
-          nutrient_id: t[0] + '_' + g + '_' + b[0] + '_' + b[1],
-          nutrient_name: t[1],
-          unit: t[2],
+          nutrient_id: id,
+          nutrient_name: s[1],
+          unit: s[2],
           gender: g,
           age_min: b[0],
           age_max: b[1],
-          reference_type: t[3],
-          reference_value: (gi === 0 ? t[5] : t[6])[bi],
+          reference_type: s[3],
+          reference_value: (gi === 0 ? s[5] : s[6])[bi],
           calculation_type: 'fixed',
           source: SRC,
           source_year: 2025,
-          note: t[4] + (t[0] === 'iron' && g === 'female' ? (bi < 2 ? '（月経あり値）' : '（月経なし値）') : ''),
+          note: s[4],
           is_active: true
         });
       });
     });
   });
   appendRowsObjs('Nutrition_Reference', rows);
-  Logger.log('seed done: rows=' + rows.length);
+  Logger.log('vitamin seed: added=' + rows.length + ' total=' + (Object.keys(existing).length + rows.length));
+}
+
+// LogsにPhase 4.1の7列が不足している環境向けの冪等補修。
+function addPhase41LogColumns() {
+  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('logs');
+  if (!sh) throw new Error('Sheet not found: logs');
+  const current = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
+  const required = ['vit_d', 'vit_e', 'vit_b1', 'vit_b2', 'vit_b6', 'vit_b12', 'folate'];
+  const missing = required.filter(function (col) { return current.indexOf(col) === -1; });
+  if (missing.length) sh.getRange(1, sh.getLastColumn() + 1, 1, missing.length).setValues([missing]);
+  Logger.log('Phase 4.1 log columns: added=' + missing.length + ' total=' + sh.getLastColumn());
 }
 // ===== Phase 4: getNutritionAnalysis（read-only） =====
 
@@ -99,6 +158,7 @@ function apiGetNutritionAnalysis(userId, params) {
   const data = cached_('nutrition_' + userId + '_' + effRange + '_' + tier, 120, function () {
     return buildNutritionAnalysis_(userId, effRange);
   });
+  data.plan_limits = { range_days: user.isPremium ? null : 7 };
   return { ok: true, data: data };
 }
 

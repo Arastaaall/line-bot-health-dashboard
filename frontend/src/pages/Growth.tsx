@@ -15,6 +15,26 @@ const BODY_PART_JA: Record<string, string> = { chest: '胸', back: '背中', leg
 const CARDIO_TYPE_JA: Record<string, string> = { running: 'ランニング', walking: 'ウォーキング', cycling: 'サイクリング', other: 'その他' };
 const COLORS = ['#2563eb', '#10b981', '#f59e0b'];
 
+function loadGrowth(range: string) {
+  return callApi('getGrowthAll', { range }).catch((e: any) => {
+    // GASの新バージョン反映前だけ、既存actionへ戻して画面を継続利用する。
+    if (e.code !== 'NOT_FOUND') throw e;
+    return Promise.all([
+      callApi('getGrowthSummary', { range }),
+      callApi('getTrainingAnalysis', { range }),
+      callApi('getMealAnalysis', { range }),
+      callApi('getBodyAnalysis', { range }),
+      callApi('getTrainingMenus'),
+    ]).then(([summary, training, meal, body, menus]: any[]) => ({
+      summary,
+      training,
+      meal,
+      body,
+      menus,
+    }));
+  });
+}
+
 function Block({ b, title, note, desc, children }: any) {
   return (
     <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">
@@ -183,10 +203,6 @@ export default function Growth() {
   const cacheRef = useRef<Record<string, any>>({});
 
   useEffect(() => {
-    callApi('getTrainingMenus').then((d: any) => setMenus(d.menus || [])).catch(() => {});
-  }, []);
-
-  useEffect(() => {
     if (cacheRef.current[range]) {
       const c = cacheRef.current[range];
       setData(c.s); setTrA(c.t); setMealA(c.m); setBodyA(c.b);
@@ -195,15 +211,12 @@ export default function Growth() {
     }
     setLoading(true);
     setError(null);
-    Promise.all([
-      callApi('getGrowthSummary', { range }),
-      callApi('getTrainingAnalysis', { range }),
-      callApi('getMealAnalysis', { range }),
-      callApi('getBodyAnalysis', { range }),
-    ])
-      .then(([s, t, m, b]: any[]) => {
+    loadGrowth(range)
+      .then((all: any) => {
+        const { summary: s, training: t, meal: m, body: b, menus: menuData } = all;
         cacheRef.current[range] = { s, t, m, b };
         setData(s); setTrA(t); setMealA(m); setBodyA(b);
+        setMenus(menuData?.menus || []);
       })
       .catch((e: any) => setError(e.message))
       .finally(() => setLoading(false));
@@ -486,6 +499,35 @@ export default function Growth() {
         </div>
       ) : (
         <div className="space-y-4">
+          <Block b={M.M5} title="目標対比（目標プラン）" note={mn.goal_disclaimer || '目標比は現在設定に基づく参考値です。'} desc="設定された目標カロリーに対する期間中の平均摂取カロリーの割合と、日ごとの到達区分（90%未満/90〜110%/110%超）の日数です。">
+            {(d: any) => {
+              const total = d.valid_days || 1;
+              return (
+                <div className="space-y-2">
+                  <div className="flex items-baseline justify-between">
+                    <p className="text-lg font-bold">
+                      目標比 {d.display_ratio}%
+                      <span className="text-xs font-normal text-gray-500 ml-2">
+                        (平均 {d.avg_intake} kcal / 目標 {d.target_calories} kcal)
+                      </span>
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <div className="flex h-3 rounded overflow-hidden bg-gray-100">
+                      <div className="bg-sky-400" style={{ width: `${(d.under_days / total) * 100}%` }} title={`90%未満: ${d.under_days}日`} />
+                      <div className="bg-indigo-500" style={{ width: `${(d.within_days / total) * 100}%` }} title={`90-110%: ${d.within_days}日`} />
+                      <div className="bg-amber-400" style={{ width: `${(d.over_days / total) * 100}%` }} title={`110%超: ${d.over_days}日`} />
+                    </div>
+                    <div className="flex justify-between text-[10px] text-gray-500">
+                      <span>90%未満: {d.under_days}日</span>
+                      <span>90-110%: {d.within_days}日</span>
+                      <span>110%超: {d.over_days}日</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            }}
+          </Block>
           <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">
             <p className="text-sm font-bold text-gray-600">摂取カロリー</p>
             <BarChart points={intakePoints} />

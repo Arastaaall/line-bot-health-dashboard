@@ -55,7 +55,7 @@ function apiGetBodyComposition(userId, params) {
   const to = params.to || null;
   if (!user.isPremium) {
     const d = new Date();
-    d.setDate(d.getDate() - 7);
+    d.setDate(d.getDate() - 6);
     from = dateKeyOf_(d);
   }
   const weightTrend = all.filter(function (r) {

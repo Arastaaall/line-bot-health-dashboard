@@ -14,16 +14,13 @@ export default function NutritionPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    callApi('getGrowthSummary', { range: '7d' })
-      .then((d: any) => setIsFree(d.plan_limits?.range_days === 7))
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
     setLoading(true);
     setError(null);
     callApi('getNutritionAnalysis', { range })
-      .then((d: any) => setData(d))
+      .then((d: any) => {
+        setData(d);
+        setIsFree(d.plan_limits?.range_days === 7);
+      })
       .catch((e: any) => setError(e.message))
       .finally(() => setLoading(false));
   }, [range]);

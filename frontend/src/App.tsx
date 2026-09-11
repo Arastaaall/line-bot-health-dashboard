@@ -1,16 +1,18 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { initLiff, isLoggedIn, login } from './services/liff';
 import AppLayout from './layouts/AppLayout';
-import Dashboard from './pages/Dashboard';
-import TrainingHome from './pages/training/TrainingHome';
-import LogForm from './pages/training/LogForm';
-import MenuManager from './pages/training/MenuManager';
-import LogHistory from './pages/training/LogHistory';
-import LogDetail from './pages/training/LogDetail';
-import BodyComp from './pages/BodyComp';
-import Growth from './pages/Growth';
-import NutritionPage from './pages/nutrition/NutritionPage';
+import Loading from './components/Loading';
+
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const TrainingHome = lazy(() => import('./pages/training/TrainingHome'));
+const LogForm = lazy(() => import('./pages/training/LogForm'));
+const MenuManager = lazy(() => import('./pages/training/MenuManager'));
+const LogHistory = lazy(() => import('./pages/training/LogHistory'));
+const LogDetail = lazy(() => import('./pages/training/LogDetail'));
+const BodyComp = lazy(() => import('./pages/BodyComp'));
+const Growth = lazy(() => import('./pages/Growth'));
+const NutritionPage = lazy(() => import('./pages/nutrition/NutritionPage'));
 
 function App() {
   const [ready, setReady] = useState(false);
@@ -36,20 +38,22 @@ function App() {
 
   return (
     <HashRouter>
-      <Routes>
-        <Route element={<AppLayout />}>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/training" element={<TrainingHome />} />
-          <Route path="/training/log" element={<LogForm />} />
-          <Route path="/training/menus" element={<MenuManager />} />
-          <Route path="/training/history" element={<LogHistory />} />
-          <Route path="/training/log/:id" element={<LogDetail />} />
-          <Route path="/body" element={<BodyComp />} />
-          <Route path="/growth" element={<Growth />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-          <Route path="/nutrition" element={<NutritionPage />} />
-        </Route>
-      </Routes>
+      <Suspense fallback={<Loading />}>
+        <Routes>
+          <Route element={<AppLayout />}>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/training" element={<TrainingHome />} />
+            <Route path="/training/log" element={<LogForm />} />
+            <Route path="/training/menus" element={<MenuManager />} />
+            <Route path="/training/history" element={<LogHistory />} />
+            <Route path="/training/log/:id" element={<LogDetail />} />
+            <Route path="/body" element={<BodyComp />} />
+            <Route path="/growth" element={<Growth />} />
+            <Route path="/nutrition" element={<NutritionPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
+        </Routes>
+      </Suspense>
     </HashRouter>
   );
 }

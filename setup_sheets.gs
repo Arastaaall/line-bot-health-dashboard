@@ -4,12 +4,12 @@ function setupSheets() {
 
   const sheets = {
     'Training_Master': ['master_id','exercise_name','exercise_type','body_part','is_bodyweight','default_met_value','met_category','input_mode','search_keywords','is_active','created_at','updated_at'],
-    'Training_Menus': ['menu_id','user_id','master_id','menu_name','training_type','input_profile','display_order','is_active','created_at','updated_at'],
+    'Training_Menus': ['menu_id','user_id','master_id','training_group','body_part','menu_name','training_type','input_profile','display_order','is_active','created_at','updated_at'],
     'Training_Logs': ['training_log_id','user_id','menu_id','master_id','exercise_name_snapshot','training_type','training_date','duration_min','distance_km','incline_pct','rpe','rpe_source','estimated_calories','calorie_estimation_method','calorie_formula_version','body_weight','memo','created_at','updated_at'],
     'Training_Sets': ['set_id','training_log_id','set_no','weight_kg','reps','rpe','is_bodyweight','duration_sec','rest_sec','memo','created_at'],
     'Body_Composition': ['body_log_id','user_id','measured_at','measurement_device','weight_kg','body_fat_pct','skeletal_muscle_kg','muscle_mass_kg','body_water_pct','visceral_fat','bmr','waist_cm','other_data','memo','created_at'],
     'Nutrition_Reference': ['nutrient_id','nutrient_name','unit','gender','age_min','age_max','reference_type','reference_value','calculation_type','source','source_year','note','is_active'],
-    'Goal_Plans': ['plan_id','user_id','goal_mode','plan_start_date','plan_end_date','start_weight_kg','target_weight_kg','bmr_kcal','tdee_kcal','pal_used','target_calories','target_protein_g','target_fat_g','target_carbs_g','status','change_reason','created_at','ended_at']
+    'Goal_Plans': ['plan_id','user_id','start_date','planned_end_date','status','goal_mode','planned_target_weight','planned_target_months','planned_target_calories','planned_tdee','source','created_at']
   };
 
   Object.keys(sheets).forEach(function (name) {
@@ -18,6 +18,10 @@ function setupSheets() {
     if ((sh.getRange(1, 1).getValue() || '') === '') {
       sh.getRange(1, 1, 1, sheets[name].length).setValues([sheets[name]]);
       sh.setFrozenRows(1);
+    } else {
+      const current = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
+      const missing = sheets[name].filter(function (col) { return current.indexOf(col) === -1; });
+      if (missing.length) sh.getRange(1, sh.getLastColumn() + 1, 1, missing.length).setValues([missing]);
     }
   });
 
@@ -44,6 +48,8 @@ function setupSheets() {
     ];
     master.getRange(2, 1, rows.length, 12).setValues(rows);
   }
+
+  ensureGoalPlansSheet_();
 
   Logger.log('setup complete: 7 sheets');
 }

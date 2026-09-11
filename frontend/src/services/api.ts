@@ -11,6 +11,11 @@ export class ApiError extends Error {
 }
 
 const RETRYABLE = [404, 500, 502, 503];
+const inFlightReads = new Map<string, Promise<unknown>>();
+
+function readKey(action: string, params: Record<string, unknown>) {
+  return action + ':' + JSON.stringify(params);
+}
 
 async function fetchWithRetry(body: string): Promise<Response> {
   const init: RequestInit = {
@@ -24,7 +29,7 @@ async function fetchWithRetry(body: string): Promise<Response> {
       const res = await fetch(GAS_URL, init);
       if (res.ok || RETRYABLE.indexOf(res.status) === -1) return res;
       lastStatus = res.status;
-    } catch (e) {
+    } catch {
       lastStatus = 0;
     }
     if (attempt < 2) await new Promise((r) => setTimeout(r, 900));
@@ -39,16 +44,32 @@ export async function callApi<T = unknown>(
   action: string,
   params: Record<string, unknown> = {},
 ): Promise<T> {
-  const token = getAccessToken();
-  if (!token) throw new ApiError('AUTH_FAILED', 'LINEトークン未取得です。再ログインしてください');
+  const isRead = action.startsWith('get');
+  const key = isRead ? readKey(action, params) : '';
+  const existing = isRead ? inFlightReads.get(key) : undefined;
+  if (existing) return existing as Promise<T>;
 
-  const res = await fetchWithRetry(JSON.stringify({ token, action, params }));
-  const json = await res.json();
+  const request = (async () => {
+    const token = getAccessToken();
+    if (!token) throw new ApiError('AUTH_FAILED', 'LINEトークン未取得です。再ログインしてください');
 
-  if (json?.ok === true) return json.data as T;
-  if (json?.ok === false) {
-    throw new ApiError(json.error?.code ?? 'SERVER_ERROR', json.error?.message ?? '不明なエラー');
+    const res = await fetchWithRetry(JSON.stringify({ token, action, params }));
+    const json = await res.json();
+
+    if (json?.ok === true) return json.data as T;
+    if (json?.ok === false) {
+      throw new ApiError(json.error?.code ?? 'SERVER_ERROR', json.error?.message ?? '不明なエラー');
+    }
+    if (json?.error) throw new ApiError('SERVER_ERROR', json.error);
+    return json as T;
+  })();
+
+  if (isRead) {
+    inFlightReads.set(key, request);
+    request.then(
+      () => { if (inFlightReads.get(key) === request) inFlightReads.delete(key); },
+      () => { if (inFlightReads.get(key) === request) inFlightReads.delete(key); },
+    );
   }
-  if (json?.error) throw new ApiError('SERVER_ERROR', json.error);
-  return json as T;
+  return request;
 }
