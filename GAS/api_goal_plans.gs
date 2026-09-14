@@ -74,6 +74,7 @@ function migrateUsersToGoalPlans() {
     if (!existing) {
       appendRowsObjs('Goal_Plans', [plan]);
       created++;
+      invalidateGoalPlanCaches_(uid);
       return;
     }
     updateRowById('Goal_Plans', 'plan_id', existing['plan_id'], {
@@ -89,6 +90,7 @@ function migrateUsersToGoalPlans() {
       created_at: existing['created_at'] || plan.created_at
     });
     updated++;
+    invalidateGoalPlanCaches_(uid);
   });
   Logger.log('Migration done: created=' + created + ' updated=' + updated + ' skipped=' + skipped);
 }
@@ -169,7 +171,6 @@ function apiGetGoalPlans(userId, params) {
 function getGoalPlansCached_(userId) {
   const user = getUserRecord_(userId);
   const tier = user.isPremium ? 'p' : 'f';
-  // 既存の cached_ 関数（CacheService.getUserCache()を使用）とキー形式を統一
   return cached_('goalplans_' + userId + '_' + tier, 120, function () {
     return getGoalPlans_(userId);
   });
@@ -180,14 +181,12 @@ function buildGoalPeriodBanner_(userId) {
   const gp = getGoalPlansCached_(userId);
   const active = gp && gp.active_plan;
   if (!active) return { show: false, message: '' };
-  
   const endKey = String(active['planned_end_date'] || '').slice(0, 10);
   if (!endKey) return { show: false, message: '' };
-  
   const show = todayKey_() > endKey; // 終了日当日は非表示
-  return { 
-    show: show, 
-    message: show ? '目標期間が終了しています。現在の体重・体組成を確認し、必要に応じて目標を更新してください。' : '' 
+  return {
+    show: show,
+    message: show ? '目標期間が終了しています。現在の体重・体組成を確認し、必要に応じて目標を更新してください。' : ''
   };
 }
 
@@ -198,7 +197,7 @@ function apiGetGoalPlans(userId, params) {
 
 // 4. キャッシュ無効化ヘルパー（将来のPlan更新/削除時に呼び出す）
 function invalidateGoalPlanCaches_(userId) {
-  const cache = CacheService.getUserCache(); // cached_関数と同一ストアを使用
+  const cache = CacheService.getUserCache(); // cached_と同じストア
   const keys = [];
   ['p', 'f'].forEach(function (t) {
     keys.push('goalplans_' + userId + '_' + t);
@@ -207,5 +206,5 @@ function invalidateGoalPlanCaches_(userId) {
       keys.push('growth_meal_' + userId + '_' + r + '_' + t);
     });
   });
-  keys.forEach(function(k) { cache.remove(k); });
+  cache.removeAll(keys);
 }

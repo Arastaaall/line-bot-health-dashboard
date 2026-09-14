@@ -27,3 +27,37 @@ function toBool_(v) {
   if (v === false || v === 'FALSE' || v === 'false' || v === 0 || v === '0' || v === '' || v === null || v === undefined) return false;
   return Boolean(v);
 }
+
+// ===== S1: パフォーマンス計測基盤（debug=1 時のみ有効）=====
+// リクエスト単位の計測。doPost側で perfReset_() を呼ばない限り __perf は null のまま＝全呼び出しがno-op（本番ゼロコスト）。
+var __perf = null;
+
+function perfReset_() {
+  __perf = { t0: Date.now(), marks: {}, sheets: {} };
+}
+
+function perfMark_(label) {
+  if (!__perf) return;
+  __perf.marks[label] = Date.now() - __perf.t0;
+}
+
+// シート読み込みの計測（呼び出し回数・ms・行数）。calls>1 が「同一リクエスト内の重複読み」の証拠になる。
+function perfSheet_(sheetName, ms, rows) {
+  if (!__perf) return;
+  var e = __perf.sheets[sheetName] || (__perf.sheets[sheetName] = { calls: 0, ms: 0, rows: 0 });
+  e.calls += 1;
+  e.ms += ms;
+  e.rows = rows;
+}
+
+function perfReport_() {
+  if (!__perf) return null;
+  var rep = { total_ms: Date.now() - __perf.t0, marks: {}, sheets: __perf.sheets };
+  var prev = 0;
+  Object.keys(__perf.marks).sort(function (a, b) { return __perf.marks[a] - __perf.marks[b]; })
+    .forEach(function (k) {
+      rep.marks[k] = { at_ms: __perf.marks[k], step_ms: __perf.marks[k] - prev };
+      prev = __perf.marks[k];
+    });
+  return rep;
+}

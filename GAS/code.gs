@@ -27,25 +27,48 @@ function doPost(e) {
   const params = req.params || {};
   const isLegacy = (action === '');
 
+  // S1: debug=1 のときだけ計測開始（本番は __perf=null のまま＝ゼロコスト）
+  const isDebug = (params.debug === 1 || params.debug === true || req.debug === 1);
+  if (isDebug) perfReset_();
+
   if (!token) {
-    return isLegacy ? legacyError_('Token is required') : fail_('AUTH_FAILED', 'Token is required');
+    return isLegacy ? legacyError_('Token is Required') : fail_('AUTH_FAILED', 'Token is required');
   }
 
-  const userId = checkAuth(token); // 認証キャッシュ経由
+  const userId = checkAuth(token);
+  if (isDebug) perfMark_('auth');
+
   if (!userId) {
     return isLegacy ? legacyError_('Invalid token or LINE API error') : fail_('AUTH_FAILED', 'Invalid token or LINE API error');
   }
 
   try {
+    let result;
     switch (action) {
       case '':
-        return jsonResponse_(buildDashboardData(userId));
+        result = buildDashboardData(userId);
+        break;
       case 'getDashboardData':
-        return ok_(getDashboardDataCached(userId));
-      // Phase 1 action は次ステップで追加
+        result = getDashboardDataCached(userId);
+        break;
+      case 'health': // ★S1検証用: POST経路テストのための最小エンドポイント（認証は通す）
+        result = { ok: true, data: { status: 'ok', method: 'POST', time: new Date().toISOString() } };
+        break;
       default:
-        return jsonResponse_(dispatchTraining(userId, action, params));
+        result = dispatchTraining(userId, action, params);
+        break;
     }
+
+    if (isDebug) perfMark_('dispatch_done');
+
+    // デバッグ情報の付与（データオブジェクトに直接追加）
+    if (isDebug && result && typeof result === 'object') {
+      result._perf = perfReport_();
+    }
+
+    // 既存のヘルパーを使ってJSONレスポンスを返す
+    return jsonResponse_(result);
+
   } catch (err) {
     return isLegacy ? legacyError_('Server error: ' + err.toString()) : fail_('SERVER_ERROR', err.toString());
   }
@@ -65,7 +88,9 @@ function getDashboardDataCached(userId) {
 function buildDashboardData(userId) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const usersSheet = ss.getSheetByName('users');
+  const tU = Date.now();
   const usersData = usersSheet.getDataRange().getValues();
+  perfSheet_('users', Date.now() - tU, usersData.length);
   const userHeader = usersData[0];
   const getIdx = function (col) { return userHeader.indexOf(col); };
 
@@ -90,7 +115,9 @@ function buildDashboardData(userId) {
   };
 
   const logsSheet = ss.getSheetByName('logs');
+  const tL = Date.now();
   const logsData = logsSheet.getDataRange().getValues();
+  perfSheet_('logs', Date.now() - tL, logsData.length);
   const logHeader = logsData[0];
   const getLogIdx = function (col) { return logHeader.indexOf(col); };
 

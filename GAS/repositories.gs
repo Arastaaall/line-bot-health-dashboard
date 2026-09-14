@@ -7,7 +7,9 @@ function sheet_(name) {
 
 function getRows(sheetName, filterFn) {
   const sh = sheet_(sheetName);
+  const t0 = Date.now();
   const values = sh.getDataRange().getValues();
+  perfSheet_(sheetName, Date.now() - t0, values.length);
   if (values.length < 2) return [];
   const header = values[0];
   const out = [];
