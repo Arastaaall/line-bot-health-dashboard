@@ -44,6 +44,9 @@ export async function callApi<T = unknown>(
   action: string,
   params: Record<string, unknown> = {},
 ): Promise<T> {
+  // ★計測開始
+  const startTime = performance.now();
+
   const isRead = action.startsWith('get');
   const key = isRead ? readKey(action, params) : '';
   const existing = isRead ? inFlightReads.get(key) : undefined;
@@ -55,6 +58,10 @@ export async function callApi<T = unknown>(
 
     const res = await fetchWithRetry(JSON.stringify({ token, action, params }));
     const json = await res.json();
+
+    // ★計測終了＆コンソール出力
+    const duration = Math.round(performance.now() - startTime);
+    console.log(`[API Perf] ${action}: ${duration}ms`);
 
     if (json?.ok === true) return json.data as T;
     if (json?.ok === false) {

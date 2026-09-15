@@ -29,13 +29,21 @@ export default function TrainingHome() {
   }, []);
 
   // S2.6: トレーニング記録フォームの先読み（Prefetch）
-  // ユーザーが「記録追加」をタップした瞬間にフォームが表示されるよう、
-  // ホーム画面表示後に裏で初期化APIを叩いてGASキャッシュを温めます。
+  // 初期描画をブロックしないよう、ブラウザがアイドル状態になったタイミングで実行
   useEffect(() => {
-    const id = window.setTimeout(() => {
+    const prefetch = () => {
       callApi('getTrainingFormInit').catch(() => {});
-    }, 500); // 画面描画を邪魔しないよう0.5秒遅延
-    return () => window.clearTimeout(id);
+    };
+    
+    // requestIdleCallback が使える環境ではそれを優先、使えなければ 1.5秒後に実行
+    const id = (window as any).requestIdleCallback 
+      ? (window as any).requestIdleCallback(prefetch) 
+      : window.setTimeout(prefetch, 1500);
+      
+    return () => {
+      if ((window as any).cancelIdleCallback) (window as any).cancelIdleCallback(id);
+      else window.clearTimeout(id as number);
+    };
   }, []);
 
   const limitReached = restricted && logs.length >= 7;

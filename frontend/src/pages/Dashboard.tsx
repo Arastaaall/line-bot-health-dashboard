@@ -22,10 +22,6 @@ export default function Dashboard() {
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) return <Loading />;
-  if (error) return <p className="text-rose-600 text-sm">エラー: {error}</p>;
-  if (!summary || !dash) return <Loading />;
-
   return (
     <div className="space-y-4 max-w-3xl">
       <GoalPlanBanner banner={goalBanner} />
