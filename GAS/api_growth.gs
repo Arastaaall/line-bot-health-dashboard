@@ -728,56 +728,9 @@ function buildTrainingAnalysis_(userId, range) {
     ready('T17', { name: gKeyName_(repKey), series: pts });
   })();
 
-  // D1 今日のひとこと（決定論的テンプレート）
-  (function () {
-    const t = todayKey_();
-    const todayTr = tLogsAll.filter(function (l) { return dateKeyOf_(new Date(l['training_date'])) === t; })
-      .sort(function (a, z) { return String(z['created_at']).localeCompare(String(a['created_at'])); });
-    if (todayTr.length) {
-      const l = todayTr[0];
-      const ls = setsByLog[String(l['training_log_id'])] || [];
-      let txt = String(l['exercise_name_snapshot']) + 'を記録';
-      if (ls.length) {
-        const s = ls[0];
-        const w = toNumber_(s['weight_kg'], null);
-        txt = String(l['exercise_name_snapshot']) + ' ' + (toBool_(s['is_bodyweight']) ? '自重' : (w !== null ? w + 'kg' : '')) + '×' + (toNumber_(s['reps'], 0) || 0) + 'を記録';
-      } else if (toNumber_(l['duration_min'], 0)) {
-        txt = String(l['exercise_name_snapshot']) + ' ' + toNumber_(l['duration_min'], 0) + '分を記録';
-      }
-      ready('D1', { text: txt });
-      return;
-    }
-    const todayMeal = mLogs.filter(function (r) { return dateKeyOf_(new Date(r['timestamp'])) === t; });
-    if (todayMeal.length) { ready('D1', { text: String(todayMeal[todayMeal.length - 1]['menu_name'] || '食事') + 'を記録' }); return; }
-    empty('D1');
-  })();
-
-  // D2 今週トレ日数
-  (function () {
-    const thisWeek = gBucket_(todayKey_(), true);
-    const days = {};
-    tLogsAll.forEach(function (l) {
-      const k = dateKeyOf_(new Date(l['training_date']));
-      if (gBucket_(k, true) === thisWeek) days[k] = true;
-    });
-    ready('D2', { days: Object.keys(days).length, reference_goal: 3 });
-  })();
-
-  // R2 通常間隔プロンプト
-  (function () {
-    const days = {};
-    tLogsAll.forEach(function (l) { days[dateKeyOf_(new Date(l['training_date']))] = true; });
-    const ds = Object.keys(days).sort();
-    if (ds.length < 6 || ds[ds.length - 1] === todayKey_()) { empty('R2'); return; }
-    let sum = 0;
-    for (let i = ds.length - 5; i < ds.length; i++) {
-      sum += (new Date(ds[i] + 'T00:00:00').getTime() - new Date(ds[i - 1] + 'T00:00:00').getTime()) / 86400000;
-    }
-    const avg = sum / 5;
-    const current = (new Date(todayKey_() + 'T00:00:00').getTime() - new Date(ds[ds.length - 1] + 'T00:00:00').getTime()) / 86400000;
-    if (current > avg * 1.5) ready('R2', { average_interval: Math.round(avg * 10) / 10, current_interval: current });
-    else empty('R2');
-  })();
+  // D1/D2/R2（Dashboard bootsと共有）
+  const glance = buildGlanceBlocks_(tLogsAll, setsByLog, mLogs);
+  Object.keys(glance).forEach(function (k) { blocks[k] = glance[k]; });
 
   // O1 月次レキャップ
   (function () {
@@ -1311,4 +1264,62 @@ function buildBodyAnalysis_(userId, range, user) {
     },
     blocks: blocks
   };
+}
+// D1/D2/R2 のみ生成（フル分析とDashboard bootsで共有）
+function buildGlanceBlocks_(tLogsAll, setsByLog, mLogs) {
+  const blocks = {};
+  function ready(k, d) { blocks[k] = { status: 'ready', data: d }; }
+  function empty(k) { blocks[k] = { status: 'empty', message: 'まだデータが足りません' }; }
+
+  // D1 今日のひとこと
+  (function () {
+    const t = todayKey_();
+    const todayTr = tLogsAll.filter(function (l) { return dateKeyOf_(new Date(l['training_date'])) === t; })
+      .sort(function (a, z) { return String(z['created_at']).localeCompare(String(a['created_at'])); });
+    if (todayTr.length) {
+      const l = todayTr[0];
+      const ls = setsByLog[String(l['training_log_id'])] || [];
+      let txt = String(l['exercise_name_snapshot']) + 'を記録';
+      if (ls.length) {
+        const s = ls[0];
+        const w = toNumber_(s['weight_kg'], null);
+        txt = String(l['exercise_name_snapshot']) + ' ' + (toBool_(s['is_bodyweight']) ? '自重' : (w !== null ? w + 'kg' : '')) + '×' + (toNumber_(s['reps'], 0) || 0) + 'を記録';
+      } else if (toNumber_(l['duration_min'], 0)) {
+        txt = String(l['exercise_name_snapshot']) + ' ' + toNumber_(l['duration_min'], 0) + '分を記録';
+      }
+      ready('D1', { text: txt }); return;
+    }
+    const todayMeal = mLogs.filter(function (r) { return dateKeyOf_(new Date(r['timestamp'])) === t; });
+    if (todayMeal.length) { ready('D1', { text: String(todayMeal[todayMeal.length - 1]['menu_name'] || '食事') + 'を記録' }); return; }
+    empty('D1');
+  })();
+
+  // D2 今週トレ日数
+  (function () {
+    const thisWeek = gBucket_(todayKey_(), true);
+    const days = {};
+    tLogsAll.forEach(function (l) {
+      const k = dateKeyOf_(new Date(l['training_date']));
+      if (gBucket_(k, true) === thisWeek) days[k] = true;
+    });
+    ready('D2', { days: Object.keys(days).length, reference_goal: 3 });
+  })();
+
+  // R2 通常間隔プロンプト
+  (function () {
+    const days = {};
+    tLogsAll.forEach(function (l) { days[dateKeyOf_(new Date(l['training_date']))] = true; });
+    const ds = Object.keys(days).sort();
+    if (ds.length < 6 || ds[ds.length - 1] === todayKey_()) { empty('R2'); return; }
+    let sum = 0;
+    for (let i = ds.length - 5; i < ds.length; i++) {
+      sum += (new Date(ds[i] + 'T00:00:00').getTime() - new Date(ds[i - 1] + 'T00:00:00').getTime()) / 86400000;
+    }
+    const avg = sum / 5;
+    const current = (new Date(todayKey_() + 'T00:00:00').getTime() - new Date(ds[ds.length - 1] + 'T00:00:00').getTime()) / 86400000;
+    if (current > avg * 1.5) ready('R2', { average_interval: Math.round(avg * 10) / 10, current_interval: current });
+    else empty('R2');
+  })();
+
+  return blocks;
 }

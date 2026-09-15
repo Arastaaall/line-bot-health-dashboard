@@ -25,11 +25,14 @@ function doPost(e) {
   const token = req.token;
   const action = req.action || '';
   const params = req.params || {};
+
+  resetSheetMemo_(); // S2: memoのスコープ=1リクエスト（跨実行のstale防止）
+
   const isLegacy = (action === '');
 
   // S1: debug=1 のときだけ計測開始（本番は __perf=null のまま＝ゼロコスト）
   const isDebug = (params.debug === 1 || params.debug === true || req.debug === 1);
-  if (isDebug) perfReset_();
+if (isDebug) perfReset_();
 
   if (!token) {
     return isLegacy ? legacyError_('Token is Required') : fail_('AUTH_FAILED', 'Token is required');
@@ -86,11 +89,7 @@ function getDashboardDataCached(userId) {
 }
 
 function buildDashboardData(userId) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const usersSheet = ss.getSheetByName('users');
-  const tU = Date.now();
-  const usersData = usersSheet.getDataRange().getValues();
-  perfSheet_('users', Date.now() - tU, usersData.length);
+  const usersData = sheetValues_('users');
   const userHeader = usersData[0];
   const getIdx = function (col) { return userHeader.indexOf(col); };
 
@@ -114,10 +113,7 @@ function buildDashboardData(userId) {
     fiber: 20, vitamins: 100, zinc: 10, magnesium: 320, sodium: 8, iron: 7.5
   };
 
-  const logsSheet = ss.getSheetByName('logs');
-  const tL = Date.now();
-  const logsData = logsSheet.getDataRange().getValues();
-  perfSheet_('logs', Date.now() - tL, logsData.length);
+  const logsData = sheetValues_('logs');
   const logHeader = logsData[0];
   const getLogIdx = function (col) { return logHeader.indexOf(col); };
 

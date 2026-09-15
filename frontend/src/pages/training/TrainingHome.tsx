@@ -28,6 +28,16 @@ export default function TrainingHome() {
       .finally(() => setLoading(false));
   }, []);
 
+  // S2.6: トレーニング記録フォームの先読み（Prefetch）
+  // ユーザーが「記録追加」をタップした瞬間にフォームが表示されるよう、
+  // ホーム画面表示後に裏で初期化APIを叩いてGASキャッシュを温めます。
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      callApi('getTrainingFormInit').catch(() => {});
+    }, 500); // 画面描画を邪魔しないよう0.5秒遅延
+    return () => window.clearTimeout(id);
+  }, []);
+
   const limitReached = restricted && logs.length >= 7;
 
   return (

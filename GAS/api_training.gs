@@ -195,22 +195,39 @@ function apiGetTrainingLogDetail(userId, params) {
 }
 
 function apiGetDashboardAll(userId, params) {
-  const training = apiGetTrainingAnalysis(userId, { range: '7d' }).data;
+  const user = getUserRecord_(userId);
+  const tier = user.isPremium ? 'p' : 'f';
   
-  // 【修正点】 apiGetGrowthSummary を呼ばず、軽量なバナー専用関数を使用
-  const goalBanner = buildGoalPeriodBanner_(userId);
+  // 1. キャッシュ確認 (growth_training_7d)
+  let glance = null;
+  const cacheKey = 'growth_training_' + userId + '7d' + tier;
+  const hit = CacheService.getUserCache().get(cacheKey);
+  if (hit) {
+    try {
+      const b = JSON.parse(hit).blocks || {};
+      if (b.D1 && b.D2 && b.R2) {
+         glance = { D1: b.D1, D2: b.D2, R2: b.R2 };
+      }
+    } catch (e) {}
+  }
   
+  // 2. キャッシュがなければ軽量計算（D1/D2/R2のみ）
+  if (!glance) {
+    const tLogsAll = getRows('Training_Logs', function (r) { return String(r['user_id']) === String(userId); });
+    const ids = {};
+    tLogsAll.forEach(function (l) { ids[String(l['training_log_id'])] = true; });
+    const setsByLog = gSetsByLog_(getRows('Training_Sets', function (s) { return !!ids[String(s['training_log_id'])]; }));
+    const mLogs = getRows('logs', function (r) { return String(r['user_id']) === String(userId); });
+    glance = buildGlanceBlocks_(tLogsAll, setsByLog, mLogs);
+  }
+
   return {
     ok: true,
     data: {
       summary: apiGetDailyCalorieSummary(userId, params).data,
-      dashboard: getDashboardDataCached(userId),
-      glance: {
-        D1: training.blocks.D1,
-        D2: training.blocks.D2,
-        R2: training.blocks.R2
-      },
-      goal_banner: goalBanner
+      dashboard: { user: { name: user.name, isPremium: user.isPremium }, glance: glance }, // ← glanceバグ修正
+      glance: glance, // 互換用エイリアス
+      goal_banner: buildGoalPeriodBanner_(userId)
     }
   };
 }

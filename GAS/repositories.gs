@@ -1,15 +1,28 @@
 // repositories.gs — Sheet読み書き共通関数
+// ===== S2: 実行単位シートmemo =====
+// GAS V8はグローバルが跨実行で残り得るため、doPost入口で必ずresetすること。
+var __sheetMemo = null;
+function resetSheetMemo_() { __sheetMemo = {}; }
+function invalidateSheetMemo_(sheetName) { if (__sheetMemo) delete __sheetMemo[sheetName]; }
+
 function sheet_(name) {
   const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(name);
   if (!sh) throw new Error('Sheet not found: ' + name);
   return sh;
 }
-
-function getRows(sheetName, filterFn) {
-  const sh = sheet_(sheetName);
+// valuesをmemo化（sheet取得＋getDataRangeの往復を1実行1回に）
+function sheetValues_(name) {
+  if (!__sheetMemo) __sheetMemo = {};
+  if (__sheetMemo[name]) return __sheetMemo[name];
+  const sh = sheet_(name);
   const t0 = Date.now();
   const values = sh.getDataRange().getValues();
-  perfSheet_(sheetName, Date.now() - t0, values.length);
+  perfSheet_(name, Date.now() - t0, values.length);
+  __sheetMemo[name] = values;
+  return values;
+}
+function getRows(sheetName, filterFn) {
+  const values = sheetValues_(sheetName);
   if (values.length < 2) return [];
   const header = values[0];
   const out = [];
@@ -31,6 +44,7 @@ function appendRowObj(sheetName, obj) {
   const header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
   const row = header.map(function (col) { return obj.hasOwnProperty(col) ? obj[col] : ''; });
   sh.appendRow(row);
+  invalidateSheetMemo_(sheetName);
 }
 
 function updateRowById(sheetName, idColumn, idValue, patch) {
@@ -50,6 +64,7 @@ function updateRowById(sheetName, idColumn, idValue, patch) {
       return true;
     }
   }
+  invalidateSheetMemo_(sheetName);
   return false;
 }
 
@@ -64,6 +79,7 @@ function deleteRowById(sheetName, idColumn, idValue) {
       return true;
     }
   }
+  invalidateSheetMemo_(sheetName);
   return false;
 }
 
@@ -79,6 +95,7 @@ function deleteRowsByForeignKey(sheetName, fkColumn, fkValue) {
       count++;
     }
   }
+  invalidateSheetMemo_(sheetName);
   return count;
 }
 
@@ -90,4 +107,5 @@ function appendRowsObjs(sheetName, objs) {
     return header.map(function (col) { return obj.hasOwnProperty(col) ? obj[col] : ''; });
   });
   sh.getRange(sh.getLastRow() + 1, 1, rows.length, header.length).setValues(rows);
+  invalidateSheetMemo_(sheetName);
 }
