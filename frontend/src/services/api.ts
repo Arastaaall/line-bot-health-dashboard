@@ -44,8 +44,9 @@ export async function callApi<T = unknown>(
   action: string,
   params: Record<string, unknown> = {},
 ): Promise<T> {
-  // ★計測開始
   const startTime = performance.now();
+  // ★追加: 開始タイムスタンプ
+  console.log(`[API Start] ${action} @ ${Math.round(startTime)}ms`);
 
   const isRead = action.startsWith('get');
   const key = isRead ? readKey(action, params) : '';
@@ -55,15 +56,14 @@ export async function callApi<T = unknown>(
   const request = (async () => {
     const token = getAccessToken();
     if (!token) throw new ApiError('AUTH_FAILED', 'LINEトークン未取得です。再ログインしてください');
-
     const res = await fetchWithRetry(JSON.stringify({ token, action, params }));
     const json = await res.json();
-
-    // ★計測終了＆コンソール出力
+    
     const duration = Math.round(performance.now() - startTime);
-    console.log(`[API Perf] ${action}: ${duration}ms`);
+    // ★修正: 終了タイムスタンプと所要時間
+    console.log(`[API End] ${action} @ ${Math.round(performance.now())}ms (${duration}ms)`);
 
-    // ★追加: GAS内部の計測データ(_perf)があればコンソールに出力
+    // GAS内部の計測データ(_perf)があればコンソールに出力
     if ((json as any)?._perf) {
       console.log(`[GAS Perf] ${action}:`, (json as any)._perf);
     }
