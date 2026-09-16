@@ -3,6 +3,8 @@ import { callApi } from '../services/api';
 import Loading from '../components/Loading';
 import GrowthGlance from '../components/GrowthGlance';
 import GoalPlanBanner from '../components/GoalPlanBanner';
+import { getUserId } from '../services/liff';
+import { loadSnapshot, saveSnapshot } from '../services/snapshot';
 
 export default function Dashboard() {
   const [loading, setLoading] = useState(true);
@@ -16,11 +18,14 @@ export default function Dashboard() {
     let hasSnapshot = false;
 
     const init = async () => {
-      const userId = await getUserId();
+      // ユーザーIDの復元と最新データ取得を並列化し、Snapshot待ちでAPIを遅らせない。
+      const userIdPromise = getUserId();
+      const dashboardPromise = callApi('getDashboardAll');
+      const userId = await userIdPromise;
       
       // 1. Snapshot (Local Cache) から即座に復元
       if (userId) {
-        const snap = loadSnapshot(userId);
+        const snap = loadSnapshot('dashboard', userId);
         if (snap && isMounted) {
           setSummary(snap.summary);
           setDash(snap.dashboard);
@@ -32,7 +37,7 @@ export default function Dashboard() {
 
       // 2. API から最新データを取得 (Revalidate)
       try {
-        const d: any = await callApi('getDashboardAll');
+        const d: any = await dashboardPromise;
         if (!isMounted) return;
         setSummary(d.summary);
         setDash(d.dashboard);
@@ -41,7 +46,7 @@ export default function Dashboard() {
         
         // 成功したら Snapshot に保存
         if (userId) {
-          saveSnapshot(userId, {
+          saveSnapshot('dashboard', userId, {
             summary: d.summary,
             dashboard: d.dashboard,
             goal_banner: d.goal_banner

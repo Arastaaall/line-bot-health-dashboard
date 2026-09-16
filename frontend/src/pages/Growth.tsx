@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { callApi } from '../services/api';
+import { getUserId } from '../services/liff';
+import { loadSnapshot, saveSnapshot } from '../services/snapshot';
 import Loading from '../components/Loading';
 import { LineChart, BarChart, MultiLineChart, ComboChart } from '../components/charts';
 
@@ -203,23 +205,64 @@ export default function Growth() {
   const cacheRef = useRef<Record<string, any>>({});
 
   useEffect(() => {
-    if (cacheRef.current[range]) {
-      const c = cacheRef.current[range];
+    let isMounted = true;
+    let usedSnapshot = false;
+    const cached = cacheRef.current[range];
+
+    if (cached) {
+      const c = cached;
       setData(c.s); setTrA(c.t); setMealA(c.m); setBodyA(c.b);
+      setMenus(c.menus || []);
+      setError(null);
       setLoading(false);
       return;
     }
     setLoading(true);
     setError(null);
-    loadGrowth(range)
-      .then((all: any) => {
+
+    // Snapshot読み込み中もAPIリクエストを開始して、復元後の再検証を待たせない。
+    const userIdPromise = getUserId();
+    const growthPromise = loadGrowth(range);
+
+    const init = async () => {
+      let userId: string | null = null;
+      try {
+        userId = await userIdPromise;
+        if (userId && isMounted) {
+          const snap = loadSnapshot('growth', userId, range);
+          if (snap) {
+            setData(snap.s);
+            setTrA(snap.t);
+            setMealA(snap.m);
+            setBodyA(snap.b);
+            setMenus(Array.isArray(snap.menus) ? snap.menus : []);
+            setLoading(false);
+            usedSnapshot = true;
+          }
+        }
+
+        const all: any = await growthPromise;
+        if (!isMounted) return;
         const { summary: s, training: t, meal: m, body: b, menus: menuData } = all;
-        cacheRef.current[range] = { s, t, m, b };
+        const menuList = Array.isArray(menuData?.menus) ? menuData.menus : [];
+        cacheRef.current[range] = { s, t, m, b, menus: menuList };
         setData(s); setTrA(t); setMealA(m); setBodyA(b);
-        setMenus(menuData?.menus || []);
-      })
-      .catch((e: any) => setError(e.message))
-      .finally(() => setLoading(false));
+        setMenus(menuList);
+        setError(null);
+        if (userId) {
+          saveSnapshot('growth', userId, { s, t, m, b, menus: menuList }, range);
+        }
+      } catch (e: any) {
+        if (!isMounted) return;
+        // Snapshot表示中のバックグラウンド更新失敗では画面をエラー化しない。
+        if (!usedSnapshot) setError(e.message);
+      } finally {
+        if (isMounted && !usedSnapshot) setLoading(false);
+      }
+    };
+
+    init();
+    return () => { isMounted = false; };
   }, [range]);
 
   const isFree = data?.plan_limits?.range_days === 7;

@@ -49,7 +49,7 @@ function appendRowObj(sheetName, obj) {
 
 function updateRowById(sheetName, idColumn, idValue, patch) {
   const sh = sheet_(sheetName);
-  const values = sh.getDataRange().getValues();
+  const values = sheetValues_(sheetName);
   const header = values[0];
   const idIdx = header.indexOf(idColumn);
   if (idIdx === -1) return false;
@@ -61,6 +61,7 @@ function updateRowById(sheetName, idColumn, idValue, patch) {
         if (c !== -1) row[c] = patch[col];
       });
       sh.getRange(i + 1, 1, 1, row.length).setValues([row]);
+      invalidateSheetMemo_(sheetName);
       return true;
     }
   }
@@ -70,12 +71,13 @@ function updateRowById(sheetName, idColumn, idValue, patch) {
 
 function deleteRowById(sheetName, idColumn, idValue) {
   const sh = sheet_(sheetName);
-  const values = sh.getDataRange().getValues();
+  const values = sheetValues_(sheetName);
   const idIdx = values[0].indexOf(idColumn);
   if (idIdx === -1) return false;
   for (let i = 1; i < values.length; i++) {
     if (String(values[i][idIdx]) === String(idValue)) {
       sh.deleteRow(i + 1);
+      invalidateSheetMemo_(sheetName);
       return true;
     }
   }
