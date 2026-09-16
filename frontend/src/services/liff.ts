@@ -20,3 +20,12 @@ export const isLoggedIn = () => liff.isLoggedIn();
 export const login = () => liff.login();
 export const logout = () => liff.logout();
 export const getAccessToken = () => liff.getAccessToken();
+
+export async function getUserId(): Promise<string | null> {
+  try {
+    const token: any = await liff.getDecodedIDToken();
+    return token?.sub || null;
+  } catch {
+    return null;
+  }
+}

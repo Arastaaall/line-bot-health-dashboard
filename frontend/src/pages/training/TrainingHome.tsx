@@ -25,7 +25,17 @@ export default function TrainingHome() {
         setRestricted(!!d.range_restricted);
       })
       .catch((e: any) => setError(e.message))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        
+        // ★修正: メインのデータ取得＆描画完了後にPrefetch（ブラウザアイドル時）
+        const prefetch = () => callApi('getTrainingFormInit').catch(() => {});
+        if ('requestIdleCallback' in window) {
+          (window as any).requestIdleCallback(prefetch);
+        } else {
+          setTimeout(prefetch, 1500); // Fallback
+        }
+      });
   }, []);
 
   // S2.6: トレーニング記録フォームの先読み（Prefetch）
