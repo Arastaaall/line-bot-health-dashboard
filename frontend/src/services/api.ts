@@ -63,6 +63,11 @@ export async function callApi<T = unknown>(
     const duration = Math.round(performance.now() - startTime);
     console.log(`[API Perf] ${action}: ${duration}ms`);
 
+    // ★追加: GAS内部の計測データ(_perf)があればコンソールに出力
+    if ((json as any)?._perf) {
+      console.log(`[GAS Perf] ${action}:`, (json as any)._perf);
+    }
+
     if (json?.ok === true) return json.data as T;
     if (json?.ok === false) {
       throw new ApiError(json.error?.code ?? 'SERVER_ERROR', json.error?.message ?? '不明なエラー');
