@@ -4,6 +4,7 @@ import ExercisePicker from '../../components/ExercisePicker';
 import type { PickedExercise } from '../../components/ExercisePicker';
 import Loading from '../../components/Loading';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { getTrainingFormInitCached, addLocalTrainingLogs } from '../../services/trainingCache';
 
 const RPE_LABELS = ['楽だった', '余裕あり', 'まあまあ', 'かなりきつい', '限界', '地獄'];
 const OTHER = 'その他';
@@ -57,7 +58,7 @@ export default function LogForm() {
   }, [focusMenuId, menus]);
 
   useEffect(() => {
-    callApi('getTrainingFormInit')
+    getTrainingFormInitCached()
       .then((d: any) => {
         setMenus(d.menus);
         setMasters(d.exercises);
@@ -122,7 +123,19 @@ export default function LogForm() {
         if (rpeLabel) params.rpe_label = rpeLabel;
         params.sets = [];
       }
-      setResult(await callApi('createTrainingLog', params));
+      const res: any = await callApi('createTrainingLog', params);
+      await addLocalTrainingLogs([{
+        training_log_id: res.training_log_id,
+        exercise_name_snapshot: picked.master?.exercise_name || params.exercise_name || '',
+        training_date: date,
+        training_type: effectiveType,
+        duration_min: params.duration_min,
+        distance_km: params.distance_km,
+        estimated_calories: res.estimated_calories,
+        body_weight: res.body_weight,
+        sets: params.sets || [],
+      }]);
+      setResult(res);
     } catch (e: any) {
       if (e.code === 'LIMIT_EXCEEDED') setLimitMsg(e.message);
       else setError(e.message);
@@ -187,6 +200,21 @@ export default function LogForm() {
         setSaving(false);
         return;
       }
+      await addLocalTrainingLogs(res.results.filter((r: any) => r.ok).map((r: any) => {
+        const input = batchLogs[r.index];
+        const menu = input.menu_id ? menus.find((m) => m.menu_id === input.menu_id) : null;
+        return {
+          training_log_id: r.data.training_log_id,
+          exercise_name_snapshot: menu?.menu_name || '',
+          training_date: input.training_date,
+          training_type: input.training_type,
+          duration_min: input.duration_min,
+          distance_km: input.distance_km,
+          estimated_calories: r.data.estimated_calories,
+          body_weight: r.data.body_weight,
+          sets: input.sets || [],
+        };
+      }));
       setBatchResult(successResults);
     } catch (e: any) {
       if (e.code === 'LIMIT_EXCEEDED') setLimitMsg(e.message);

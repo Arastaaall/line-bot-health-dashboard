@@ -4,6 +4,7 @@ import ExercisePicker from '../../components/ExercisePicker';
 import type { PickedExercise } from '../../components/ExercisePicker';
 import NamePicker from '../../components/NamePicker';
 import Loading from '../../components/Loading';
+import { getTrainingFormInitCached, invalidateTrainingFormInitCache } from '../../services/trainingCache';
 
 const OTHER = 'その他';
 
@@ -24,7 +25,7 @@ export default function MenuManager() {
   const [clientId, setClientId] = useState(() => `${Date.now()}_${Math.random().toString(36).slice(2)}`);
 
   const load = () => {
-    callApi('getTrainingFormInit')
+    getTrainingFormInitCached()
       .then((d: any) => {
         setMenus(d.menus);
         setLimit(d.limit);
@@ -63,6 +64,7 @@ export default function MenuManager() {
     setMenus(newFlat); // 楽観更新（自動保存）
     try {
       await callApi('updateTrainingMenuOrder', { orders });
+      invalidateTrainingFormInitCache();
     } catch (e: any) {
       setError(e.message);
       load();
@@ -106,6 +108,7 @@ export default function MenuManager() {
       if (picked.master) params.master_id = picked.master.master_id;
       else params.training_type = freeType;
       await callApi('createTrainingMenu', params);
+      invalidateTrainingFormInitCache();
       setPicked({ master: null, freeName: '' });
       setName('');
       setGroup('');
@@ -124,6 +127,7 @@ export default function MenuManager() {
     setError(null);
     try {
       await callApi('deleteTrainingMenu', { menu_id: id });
+      invalidateTrainingFormInitCache();
       load();
     } catch (e: any) { setError(e.message); }
   };

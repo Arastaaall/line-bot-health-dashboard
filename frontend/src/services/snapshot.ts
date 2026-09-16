@@ -1,4 +1,4 @@
-export type SnapshotType = 'dashboard' | 'growth';
+export type SnapshotType = 'dashboard' | 'growth' | 'training_home' | 'bodycomp' | 'nutrition';
 
 const KEY_PREFIX = 'snapshot_v1_';
 const MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24時間以上古いデータは破棄

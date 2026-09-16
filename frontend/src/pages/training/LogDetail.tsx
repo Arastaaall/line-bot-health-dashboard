@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { callApi } from '../../services/api';
 import Loading from '../../components/Loading';
 
@@ -8,21 +8,36 @@ const isBw = (v: any) => v === true || v === 'TRUE' || v === 'true' || v === 1 |
 export default function LogDetail() {
   const { id } = useParams();
   const nav = useNavigate();
-  const [loading, setLoading] = useState(true);
-  const [data, setData] = useState<any>(null);
+  const location = useLocation();
+  const knownLog = (location.state as { knownLog?: any } | null)?.knownLog || null;
+  const [loading, setLoading] = useState(!knownLog);
+  const [data, setData] = useState<any>(() => knownLog ? {
+    log: knownLog,
+    sets: knownLog.sets || [],
+    history: [],
+    history_restricted: false,
+  } : null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    setError(null);
+    if (knownLog) {
+      setData({ log: knownLog, sets: knownLog.sets || [], history: [], history_restricted: false });
+      setLoading(false);
+    } else {
+      setData(null);
+      setLoading(true);
+    }
     callApi('getTrainingLogDetail', { training_log_id: id })
       .then((d: any) => setData(d))
-      .catch((e: any) => setError(e.message))
+      .catch((e: any) => { if (!knownLog) setError(e.message); })
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, knownLog]);
 
   if (loading) return <Loading />;
   if (error) return <p className="text-rose-600 text-sm">エラー: {error}</p>;
   if (!data) return null;
-  const { log, sets, history, history_restricted } = data;
+  const { log, sets, history = [], history_restricted } = data;
 
   return (
     <div className="max-w-md mx-auto space-y-4">

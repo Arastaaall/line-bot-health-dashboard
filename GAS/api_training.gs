@@ -16,13 +16,22 @@ function getUserRecord_(userId) {
 
 function withLock_(fn) {
   const lock = LockService.getScriptLock();
+  const measure = !!__perf;
+  const t0 = measure ? Date.now() : 0;
+  let t1 = 0;
   try {
     lock.waitLock(5000);
   } catch (e) {
+    if (measure) __lockPerf = { lock_wait_ms: Date.now() - t0, lock_hold_ms: 0 };
     return { ok: false, error: { code: 'SERVER_ERROR', message: '混み合っています。しばらくして再度お試しください' } };
   }
+  t1 = measure ? Date.now() : 0;
   try {
-    return fn();
+    const result = fn();
+    if (measure && result && typeof result === 'object') {
+      __lockPerf = { lock_wait_ms: t1 - t0, lock_hold_ms: Date.now() - t1 };
+    }
+    return result;
   } finally {
     lock.releaseLock();
   }
@@ -58,9 +67,26 @@ function dedupSave_(clientId, payload) {
   try { CacheService.getUserCache().put('dedup_' + clientId, JSON.stringify(payload), 600); } catch (e) {}
 }
 
+var __trainingMasterMap = null;
+
+function getTrainingMasterRows_() {
+  return cached_('master_all_v1', 3600, function () {
+    return getRows('Training_Master', function (r) { return toBool_(r['is_active']); });
+  });
+}
+
+function getTrainingMasterMap_() {
+  if (__trainingMasterMap) return __trainingMasterMap;
+  const map = {};
+  getTrainingMasterRows_().forEach(function (r) { map[String(r['master_id'])] = r; });
+  __trainingMasterMap = map;
+  return map;
+}
+
 function getMasterDefaults_(masterId) {
   if (!masterId) return null;
-  const m = findById('Training_Master', 'master_id', masterId);
+  // 通常はactive master mapを使い、過去ログが参照するinactive masterは従来どおり検索で救済する。
+  const m = getTrainingMasterMap_()[String(masterId)] || findById('Training_Master', 'master_id', masterId);
   if (!m) return null;
   return {
     master_id: m['master_id'],
@@ -90,9 +116,7 @@ function getSetsOfLog_(logId) {
 
 // ---------- Read系 ----------
 function apiGetTrainingMaster(userId, params) {
-  const rows = cached_('master_all_v1', 3600, function () {
-    return getRows('Training_Master', function (r) { return toBool_(r['is_active']); });
-  });
+  const rows = getTrainingMasterRows_();
   return { ok: true, data: { exercises: rows } };
 }
 
@@ -802,7 +826,8 @@ function apiUpdateTrainingMenuOrder(userId, params) {
 
     // 単一読み込みで一括更新
     const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Training_Menus');
-    const values = sh.getDataRange().getValues();
+    // 上のgetRows()で同じシートを読んでいるため、リクエスト内memoを再利用する。
+    const values = sheetValues_('Training_Menus');
     const header = values[0];
     const idIdx = header.indexOf('menu_id');
     const orderIdx = header.indexOf('display_order');
@@ -821,6 +846,7 @@ function apiUpdateTrainingMenuOrder(userId, params) {
       }
     });
 
+    invalidateSheetMemo_('Training_Menus');
     invalidateMenuCaches_(userId);
     return { ok: true, data: {} };
   });

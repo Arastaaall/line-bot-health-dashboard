@@ -27,12 +27,15 @@ function doPost(e) {
   const params = req.params || {};
 
   resetSheetMemo_(); // S2: memoのスコープ=1リクエスト（跨実行のstale防止）
+  __lockPerf = null;
+  __trainingMasterMap = null;
 
   const isLegacy = (action === '');
 
   // S1: debug=1 のときだけ計測開始（本番は __perf=null のまま＝ゼロコスト）
   const isDebug = (params.debug === 1 || params.debug === true || req.debug === 1);
-if (isDebug) perfReset_();
+  if (isDebug) perfReset_();
+  else __perf = null;
 
   if (!token) {
     return isLegacy ? legacyError_('Token is Required') : fail_('AUTH_FAILED', 'Token is required');
@@ -67,6 +70,10 @@ if (isDebug) perfReset_();
     // デバッグ情報の付与（データオブジェクトに直接追加）
     if (isDebug && result && typeof result === 'object') {
       result._perf = perfReport_();
+      if (__lockPerf) {
+        result._perf.lock_wait_ms = __lockPerf.lock_wait_ms;
+        result._perf.lock_hold_ms = __lockPerf.lock_hold_ms;
+      }
     }
 
     // 既存のヘルパーを使ってJSONレスポンスを返す

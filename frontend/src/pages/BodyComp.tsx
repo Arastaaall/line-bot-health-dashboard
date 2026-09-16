@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { callApi } from '../services/api';
+import { getUserId } from '../services/liff';
+import { loadSnapshot, saveSnapshot } from '../services/snapshot';
 import Loading from '../components/Loading';
 
 function todayKey() {
@@ -16,7 +18,7 @@ function fmt(dt: any) {
 
 const VISCERAL_NOTE = '＊内臓脂肪レベルは測定機器が返す値をそのまま表示した参考値です。異なる機器間での値の比較はできません。';
 
-function FormModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+function FormModal({ onClose, onSaved }: { onClose: () => void; onSaved: (params: any, result: any) => void | Promise<void> }) {
   const [device, setDevice] = useState('home_scale');
   const [date, setDate] = useState(todayKey());
   const [time, setTime] = useState('');
@@ -59,8 +61,8 @@ function FormModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => v
         if (bw !== '') params.body_water_pct = Number(bw);
         if (wc !== '') params.waist_cm = Number(wc);
       }
-      await callApi('createBodyCompositionLog', params);
-      onSaved();
+      const result: any = await callApi('createBodyCompositionLog', params);
+      await onSaved(params, result);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -140,6 +142,34 @@ function FormModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => v
   );
 }
 
+const DETAIL_FIELDS = ['body_fat_pct', 'skeletal_muscle_kg', 'muscle_mass_kg', 'body_water_pct', 'visceral_fat', 'bmr', 'waist_cm'];
+
+function addLocalBodyRecord(base: any, params: any, bodyLogId: string) {
+  if (!base) return null;
+  const trend = [
+    ...(base.weight_trend || []).filter((r: any) => String(r.body_log_id) !== String(bodyLogId)),
+    { body_log_id: bodyLogId, measured_at: params.measured_at, weight_kg: Number(params.weight_kg) },
+  ].sort((a: any, b: any) => new Date(b.measured_at).getTime() - new Date(a.measured_at).getTime());
+  const hasDetail = DETAIL_FIELDS.some((field) => params[field] !== undefined);
+  const detailRecords = hasDetail ? [
+    {
+      measured_at: params.measured_at,
+      measurement_device: params.measurement_device,
+      ...Object.fromEntries(DETAIL_FIELDS.map((field) => [field, params[field] ?? null])),
+    },
+    ...(base.detail_records || []),
+  ].sort((a: any, b: any) => new Date(b.measured_at).getTime() - new Date(a.measured_at).getTime()).slice(0, 2) : base.detail_records || [];
+  return { ...base, weight_trend: trend, detail_records: detailRecords };
+}
+
+function removeLocalBodyRecord(base: any, bodyLogId: string) {
+  if (!base) return null;
+  return {
+    ...base,
+    weight_trend: (base.weight_trend || []).filter((r: any) => String(r.body_log_id) !== String(bodyLogId)),
+  };
+}
+
 export default function BodyComp() {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<any>(null);
@@ -151,15 +181,40 @@ export default function BodyComp() {
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    let hasSnapshot = false;
+    let userId: string | null = null;
+    const userIdPromise = getUserId();
+    const bodyPromise = callApi('getBodyComposition');
     try {
-      setData(await callApi('getBodyComposition'));
+      userId = await userIdPromise;
+      if (userId) {
+        const snap = loadSnapshot('bodycomp', userId);
+        if (snap) {
+          setData(snap);
+          setLoading(false);
+          hasSnapshot = true;
+        }
+      }
+      const fresh = await bodyPromise;
+      setData(fresh);
+      if (userId) saveSnapshot('bodycomp', userId, fresh);
     } catch (e: any) {
-      setError(e.message);
+      if (!hasSnapshot) setError(e.message);
     } finally {
       setLoading(false);
     }
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  const revalidate = useCallback(async (userId: string | null) => {
+    try {
+      const fresh = await callApi('getBodyComposition');
+      setData(fresh);
+      if (userId) saveSnapshot('bodycomp', userId, fresh);
+    } catch {
+      // ローカル反映済みの画面を、バックグラウンド再検証失敗で白紙にしない。
+    }
+  }, []);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -171,8 +226,17 @@ export default function BodyComp() {
     setDeleting(true);
     try {
       await callApi('deleteBodyCompositionLog', { body_log_id: id });
+      const userId = await getUserId();
+      const snap = userId ? loadSnapshot('bodycomp', userId) : null;
+      const next = removeLocalBodyRecord(snap || data, id);
+      if (next) {
+        setData(next);
+        if (userId && snap) saveSnapshot('bodycomp', userId, next);
+      }
       showToast('削除しました');
-      await load();
+      setDeleting(false);
+      void revalidate(userId);
+      return;
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -260,10 +324,17 @@ export default function BodyComp() {
       {formOpen && (
         <FormModal
           onClose={() => setFormOpen(false)}
-          onSaved={() => {
+          onSaved={async (params, result) => {
             setFormOpen(false);
             showToast('登録しました');
-            load();
+            const userId = await getUserId();
+            const snap = userId ? loadSnapshot('bodycomp', userId) : null;
+            const next = addLocalBodyRecord(snap || data, params, result.body_log_id);
+            if (next) {
+              setData(next);
+              if (userId) saveSnapshot('bodycomp', userId, next);
+            }
+            void revalidate(userId);
           }}
         />
       )}

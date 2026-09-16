@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { callApi } from '../../services/api';
+import { getUserId } from '../../services/liff';
+import { loadSnapshot, saveSnapshot } from '../../services/snapshot';
+import { getTrainingFormInitCached } from '../../services/trainingCache';
 import Loading from '../../components/Loading';
 import RoutineBoard from './RoutineBoard';
 
@@ -17,25 +20,56 @@ export default function TrainingHome() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let mounted = true;
+    let hasSnapshot = false;
+    const userIdPromise = getUserId();
     const t = key(new Date());
-    callApi('getTrainingLogs', { from: t, to: t })
-      .then((d: any) => {
+    const logsPromise = callApi('getTrainingLogs', { from: t, to: t });
+
+    const init = async () => {
+      let userId: string | null = null;
+      try {
+        userId = await userIdPromise;
+        if (userId && mounted) {
+          const snap = loadSnapshot('training_home', userId);
+          if (snap) {
+            const snapLogs = Array.isArray(snap.logs)
+              ? snap.logs.filter((l: any) => key(new Date(l.training_date)) === t)
+              : [];
+            setLogs(snapLogs);
+            setRestricted(!!snap.range_restricted);
+            setLoading(false);
+            hasSnapshot = true;
+          }
+        }
+
+        const d: any = await logsPromise;
+        if (!mounted) return;
         const todayLogs = (d.logs || []).filter((l: any) => key(new Date(l.training_date)) === t);
         setLogs(todayLogs);
         setRestricted(!!d.range_restricted);
-      })
-      .catch((e: any) => setError(e.message))
-      .finally(() => {
-        setLoading(false);
-      });
+        if (userId) {
+          saveSnapshot('training_home', userId, {
+            logs: todayLogs,
+            range_restricted: !!d.range_restricted,
+            savedAt: Date.now(),
+          });
+        }
+      } catch (e: any) {
+        if (mounted && !hasSnapshot) setError(e.message);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    };
+
+    init();
+    return () => { mounted = false; };
   }, []);
 
   // S2.6: トレーニング記録フォームの先読み（Prefetch）
   // 初期描画をブロックしないよう、ブラウザがアイドル状態になったタイミングで実行
   useEffect(() => {
-    const prefetch = () => {
-      callApi('getTrainingFormInit').catch(() => {});
-    };
+    const prefetch = () => { getTrainingFormInitCached().catch(() => {}); };
     
     // requestIdleCallback が使える環境ではそれを優先、使えなければ 1.5秒後に実行
     const id = (window as any).requestIdleCallback 
@@ -69,7 +103,12 @@ export default function TrainingHome() {
             {limitReached ? (
               <span className="text-xs text-gray-400">本日の上限に到達</span>
             ) : (
-              <button onClick={() => nav('/training/log')} className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-bold">＋ 記録追加</button>
+              <button
+                onPointerDown={() => { getTrainingFormInitCached().catch(() => {}); }}
+                onTouchStart={() => { getTrainingFormInitCached().catch(() => {}); }}
+                onClick={() => nav('/training/log')}
+                className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-bold"
+              >＋ 記録追加</button>
             )}
           </div>
 
@@ -88,7 +127,7 @@ export default function TrainingHome() {
               {logs.map((l: any) => (
                 <button
                   key={l.training_log_id}
-                  onClick={() => nav(`/training/log/${l.training_log_id}`)}
+                  onClick={() => nav(`/training/log/${l.training_log_id}`, { state: { knownLog: l } })}
                   className="w-full p-4 flex items-center justify-between text-left hover:bg-gray-50"
                 >
                   <div>

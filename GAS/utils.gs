@@ -31,6 +31,7 @@ function toBool_(v) {
 // ===== S1: パフォーマンス計測基盤（debug=1 時のみ有効）=====
 // リクエスト単位の計測。doPost側で perfReset_() を呼ばない限り __perf は null のまま＝全呼び出しがno-op（本番ゼロコスト）。
 var __perf = null;
+var __lockPerf = null;
 
 function perfReset_() {
   __perf = { t0: Date.now(), marks: {}, sheets: {} };

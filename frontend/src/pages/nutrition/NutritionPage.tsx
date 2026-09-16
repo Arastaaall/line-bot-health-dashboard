@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { callApi } from '../../services/api';
+import { getUserId } from '../../services/liff';
+import { loadSnapshot, saveSnapshot } from '../../services/snapshot';
 import Loading from '../../components/Loading';
 import PeriodPills from './components/PeriodPills';
 import AnalysisTab from './AnalysisTab';
@@ -14,15 +16,41 @@ export default function NutritionPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let mounted = true;
+    let hasSnapshot = false;
     setLoading(true);
     setError(null);
-    callApi('getNutritionAnalysis', { range })
-      .then((d: any) => {
+    const userIdPromise = getUserId();
+    const nutritionPromise = callApi('getNutritionAnalysis', { range });
+
+    const init = async () => {
+      let userId: string | null = null;
+      try {
+        userId = await userIdPromise;
+        if (userId && mounted) {
+          const snap = loadSnapshot('nutrition', userId, range);
+          if (snap) {
+            setData(snap);
+            setIsFree(snap.plan_limits?.range_days === 7);
+            setLoading(false);
+            hasSnapshot = true;
+          }
+        }
+
+        const d: any = await nutritionPromise;
+        if (!mounted) return;
         setData(d);
         setIsFree(d.plan_limits?.range_days === 7);
-      })
-      .catch((e: any) => setError(e.message))
-      .finally(() => setLoading(false));
+        if (userId) saveSnapshot('nutrition', userId, d, range);
+      } catch (e: any) {
+        if (mounted && !hasSnapshot) setError(e.message);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    };
+
+    init();
+    return () => { mounted = false; };
   }, [range]);
 
   return (
