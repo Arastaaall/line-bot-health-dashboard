@@ -111,7 +111,7 @@ function TrajectoryTable({ menu, showTitle }: { menu: any; showTitle: boolean })
     callApi('getMenuTrajectory', menu.master_id ? { master_id: menu.master_id } : { exercise_name_snapshot: menu.menu_name })
       .then((d: any) => { cacheRef.current[ck] = d; setTr(d); })
       .finally(() => setLoadingTr(false));
-  }, [menu.menu_id]);
+  }, [menu.menu_id, menu.master_id, menu.menu_name]);
 
   useEffect(() => {
     if (tr && scrollRef.current) scrollRef.current.scrollLeft = scrollRef.current.scrollWidth;

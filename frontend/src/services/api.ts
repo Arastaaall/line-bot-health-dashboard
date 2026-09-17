@@ -2,6 +2,16 @@ import { getAccessToken } from './liff';
 
 const GAS_URL = import.meta.env.VITE_GAS_URL;
 
+// 本番環境では通常ログを出さず、調査時だけ localStorage から有効化する。
+// Dev 環境では計測ログと debug payload を有効にする。
+const DEBUG = import.meta.env.DEV || (() => {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem('gasdebug') === '1';
+  } catch {
+    return false;
+  }
+})();
+
 export class ApiError extends Error {
   code: string;
   constructor(code: string, message: string) {
@@ -17,7 +27,7 @@ function readKey(action: string, params: Record<string, unknown>) {
   return action + ':' + JSON.stringify(params);
 }
 
-async function fetchWithRetry(body: string): Promise<Response> {
+async function fetchWithRetry(body: string, action: string): Promise<Response> {
   const init: RequestInit = {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -25,14 +35,32 @@ async function fetchWithRetry(body: string): Promise<Response> {
   };
   let lastStatus = 0;
   for (let attempt = 0; attempt < 3; attempt++) {
+    const attemptStart = performance.now();
     try {
       const res = await fetch(GAS_URL, init);
-      if (res.ok || RETRYABLE.indexOf(res.status) === -1) return res;
+      const duration = Math.round(performance.now() - attemptStart);
+      if (res.ok || RETRYABLE.indexOf(res.status) === -1) {
+        if (DEBUG) {
+          console.log(`[API Attempt] ${action} #${attempt + 1} status=${res.status} ${duration}ms`);
+        }
+        return res;
+      }
+      if (DEBUG) {
+        console.warn(`[API Retry] ${action} #${attempt + 1} status=${res.status} ${duration}ms`);
+      }
       lastStatus = res.status;
-    } catch {
+    } catch (error) {
+      const duration = Math.round(performance.now() - attemptStart);
+      if (DEBUG) {
+        const reason = error instanceof Error ? error.message : String(error);
+        console.warn(`[API Retry] ${action} #${attempt + 1} network_or_cors ${duration}ms ${reason}`);
+      }
       lastStatus = 0;
     }
-    if (attempt < 2) await new Promise((r) => setTimeout(r, 900));
+    if (attempt < 2) {
+      if (DEBUG) console.log(`[API Retry] ${action} waiting=900ms`);
+      await new Promise((r) => setTimeout(r, 900));
+    }
   }
   if (lastStatus === 0) {
     throw new ApiError('NETWORK', '通信に失敗しました。一時的なエラーの可能性があります。履歴を確認してから再操作してください。');
@@ -45,8 +73,7 @@ export async function callApi<T = unknown>(
   params: Record<string, unknown> = {},
 ): Promise<T> {
   const startTime = performance.now();
-  // ★追加: 開始タイムスタンプ
-  console.log(`[API Start] ${action} @ ${Math.round(startTime)}ms`);
+  if (DEBUG) console.log(`[API Start] ${action} @ ${Math.round(startTime)}ms`);
 
   const isRead = action.startsWith('get');
   const key = isRead ? readKey(action, params) : '';
@@ -56,16 +83,18 @@ export async function callApi<T = unknown>(
   const request = (async () => {
     const token = getAccessToken();
     if (!token) throw new ApiError('AUTH_FAILED', 'LINEトークン未取得です。再ログインしてください');
-    const res = await fetchWithRetry(JSON.stringify({ token, action, params }));
+    const payload = DEBUG ? { token, action, params, debug: 1 } : { token, action, params };
+    const res = await fetchWithRetry(JSON.stringify(payload), action);
     const json = await res.json();
     
     const duration = Math.round(performance.now() - startTime);
-    // ★修正: 終了タイムスタンプと所要時間
-    console.log(`[API End] ${action} @ ${Math.round(performance.now())}ms (${duration}ms)`);
+    if (DEBUG) {
+      console.log(`[API End] ${action} @ ${Math.round(performance.now())}ms (${duration}ms)`);
 
-    // GAS内部の計測データ(_perf)があればコンソールに出力
-    if ((json as any)?._perf) {
-      console.log(`[GAS Perf] ${action}:`, (json as any)._perf);
+      // GAS内部の計測データ(_perf)があればコンソールに出力
+      if ((json as any)?._perf) {
+        console.log(`[GAS Perf] ${action}:`, (json as any)._perf);
+      }
     }
 
     if (json?.ok === true) return json.data as T;

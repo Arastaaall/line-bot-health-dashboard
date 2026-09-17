@@ -66,22 +66,6 @@ export default function TrainingHome() {
     return () => { mounted = false; };
   }, []);
 
-  // S2.6: トレーニング記録フォームの先読み（Prefetch）
-  // 初期描画をブロックしないよう、ブラウザがアイドル状態になったタイミングで実行
-  useEffect(() => {
-    const prefetch = () => { getTrainingFormInitCached().catch(() => {}); };
-    
-    // requestIdleCallback が使える環境ではそれを優先、使えなければ 1.5秒後に実行
-    const id = (window as any).requestIdleCallback 
-      ? (window as any).requestIdleCallback(prefetch) 
-      : window.setTimeout(prefetch, 1500);
-      
-    return () => {
-      if ((window as any).cancelIdleCallback) (window as any).cancelIdleCallback(id);
-      else window.clearTimeout(id as number);
-    };
-  }, []);
-
   const limitReached = restricted && logs.length >= 7;
 
   return (

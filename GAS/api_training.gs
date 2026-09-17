@@ -39,10 +39,39 @@ function withLock_(fn) {
 
 function cached_(key, ttl, fn) {
   const c = CacheService.getUserCache();
+  const getStart = Date.now();
   const hit = c.get(key);
-  if (hit) return JSON.parse(hit);
+  const getMs = Date.now() - getStart;
+  if (hit) {
+    if (__perf) {
+      __perf.cache = __perf.cache || {};
+      __perf.cache[key] = {
+        hit: true,
+        get_ms: getMs,
+        chars: hit.length,
+        bytes: Utilities.newBlob(hit).getBytes().length,
+      };
+    }
+    return JSON.parse(hit);
+  }
   const data = fn();
-  try { c.put(key, JSON.stringify(data), ttl); } catch (e) {}
+  const payload = JSON.stringify(data);
+  const payloadBytes = __perf ? Utilities.newBlob(payload).getBytes().length : 0;
+  const putStart = Date.now();
+  let putOk = true;
+  try { c.put(key, payload, ttl); } catch (e) { putOk = false; }
+  if (__perf) {
+    __perf.cache = __perf.cache || {};
+    __perf.cache[key] = {
+      hit: false,
+      get_ms: getMs,
+      chars: payload.length,
+      bytes: payloadBytes,
+      over_100k: payloadBytes > 100 * 1024,
+      put_ok: putOk,
+      put_ms: Date.now() - putStart,
+    };
+  }
   return data;
 }
 
@@ -131,8 +160,11 @@ function apiGetTrainingMenus(userId, params) {
 }
 
 function apiGetTrainingLogs(userId, params) {
+  perfMark_('tlogs_start');
   const user = getUserRecord_(userId);
+  perfMark_('tlogs_user');
   const all = cached_('tlogs_' + userId, 60, function () {
+    perfMark_('tlogs_build_start');
     const logs = getRows('Training_Logs', function (r) { return String(r['user_id']) === String(userId); });
     const setsAll = getRows('Training_Sets');
     const byLog = {};
@@ -143,8 +175,11 @@ function apiGetTrainingLogs(userId, params) {
     logs.forEach(function (l) {
       l.sets = (byLog[String(l['training_log_id'])] || []).sort(function (a, b) { return (Number(a['set_no']) || 0) - (Number(b['set_no']) || 0); });
     });
-    return logs.sort(function (a, b) { return new Date(b['training_date']) - new Date(a['training_date']); });
+    const result = logs.sort(function (a, b) { return new Date(b['training_date']) - new Date(a['training_date']); });
+    perfMark_('tlogs_build_end');
+    return result;
   });
+  perfMark_('tlogs_cache');
 
   let from, to;
   const d7 = new Date();

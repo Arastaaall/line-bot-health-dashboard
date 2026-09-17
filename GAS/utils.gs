@@ -34,7 +34,7 @@ var __perf = null;
 var __lockPerf = null;
 
 function perfReset_() {
-  __perf = { t0: Date.now(), marks: {}, sheets: {} };
+  __perf = { t0: Date.now(), marks: {}, sheets: {}, cache: {} };
 }
 
 function perfMark_(label) {
@@ -53,7 +53,7 @@ function perfSheet_(sheetName, ms, rows) {
 
 function perfReport_() {
   if (!__perf) return null;
-  var rep = { total_ms: Date.now() - __perf.t0, marks: {}, sheets: __perf.sheets };
+  var rep = { total_ms: Date.now() - __perf.t0, marks: {}, sheets: __perf.sheets, cache: __perf.cache };
   var prev = 0;
   Object.keys(__perf.marks).sort(function (a, b) { return __perf.marks[a] - __perf.marks[b]; })
     .forEach(function (k) {
