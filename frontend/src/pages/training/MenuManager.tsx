@@ -22,6 +22,7 @@ export default function MenuManager() {
   const [info, setInfo] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [clientId, setClientId] = useState(() => `${Date.now()}_${Math.random().toString(36).slice(2)}`);
 
   const load = () => {
@@ -51,6 +52,8 @@ export default function MenuManager() {
   }, [menus]);
 
   const persistOrder = async (newFlat: any[]) => {
+    if (saving) return;
+    setSaving(true);
     const orders: any[] = [];
     const gmap = new Map<string, any[]>();
     newFlat.forEach((m) => {
@@ -68,6 +71,8 @@ export default function MenuManager() {
     } catch (e: any) {
       setError(e.message);
       load();
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -96,9 +101,11 @@ export default function MenuManager() {
   };
 
   const add = async () => {
+    if (saving) return;
     setError(null); setInfo(null); setLimitMsg(null);
     const menuName = picked.master ? picked.master.exercise_name : name.trim();
     if (!menuName) { setError('種目を選択するかメニュー名を入力してください'); return; }
+    setSaving(true);
     try {
       const params: any = {
         menu_name: menuName,
@@ -118,18 +125,22 @@ export default function MenuManager() {
       if (e.code === 'LIMIT_EXCEEDED') setLimitMsg(e.message);
       else setError(e.message);
     } finally {
+      setSaving(false);
       setClientId(`${Date.now()}_${Math.random().toString(36).slice(2)}`);
     }
   };
 
   const del = async (id: string) => {
+    if (saving) return;
     if (!window.confirm('削除しますか？（過去ログは残ります）')) return;
     setError(null);
+    setSaving(true);
     try {
       await callApi('deleteTrainingMenu', { menu_id: id });
       invalidateTrainingFormInitCache();
       load();
     } catch (e: any) { setError(e.message); }
+    finally { setSaving(false); }
   };
 
   if (loading) return <Loading />;
@@ -151,7 +162,7 @@ export default function MenuManager() {
               {g.items.map((m, i) => (
                 <div
                   key={m.menu_id}
-                  draggable
+                  draggable={!saving}
                   onDragStart={(e) => {
                     setDragId(m.menu_id);
                     e.dataTransfer.setData('text/plain', m.menu_id);
@@ -180,9 +191,9 @@ export default function MenuManager() {
                     <p className="text-sm font-bold text-gray-800">{m.menu_name}</p>
                     <p className="text-xs text-gray-500">{m.training_type}</p>
                   </div>
-                  <button onClick={() => move(g.items, i, -1)} className="px-2 py-1 text-xs bg-gray-100 rounded">↑</button>
-                  <button onClick={() => move(g.items, i, 1)} className="px-2 py-1 text-xs bg-gray-100 rounded">↓</button>
-                  <button onClick={() => del(m.menu_id)} className="px-2 py-1 text-xs text-rose-600 bg-rose-50 rounded">削除</button>
+                  <button disabled={saving} onClick={() => move(g.items, i, -1)} className="px-2 py-1 text-xs bg-gray-100 rounded disabled:opacity-50">↑</button>
+                  <button disabled={saving} onClick={() => move(g.items, i, 1)} className="px-2 py-1 text-xs bg-gray-100 rounded disabled:opacity-50">↓</button>
+                  <button disabled={saving} onClick={() => del(m.menu_id)} className="px-2 py-1 text-xs text-rose-600 bg-rose-50 rounded disabled:opacity-50">{saving ? '処理中...' : '削除'}</button>
                 </div>
               ))}
             </div>
@@ -218,7 +229,7 @@ export default function MenuManager() {
         )}
         {info && <p className="text-xs text-emerald-600">{info}</p>}
         {error && <p className="text-xs text-rose-600">エラー: {error}</p>}
-        <button onClick={add} className="w-full py-2 rounded-lg bg-blue-600 text-white text-sm font-bold">追加する</button>
+        <button disabled={saving} onClick={add} className="w-full py-2 rounded-lg bg-blue-600 text-white text-sm font-bold disabled:opacity-50">{saving ? '保存中...' : '追加する'}</button>
       </div>
     </div>
   );

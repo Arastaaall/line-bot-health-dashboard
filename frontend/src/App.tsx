@@ -17,21 +17,26 @@ const NutritionPage = lazy(() => import('./pages/nutrition/NutritionPage'));
 function App() {
   const [ready, setReady] = useState(false);
   const [initOk, setInitOk] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   useEffect(() => {
     initLiff().then((ok) => {
       setInitOk(ok);
       setReady(true);
     });
+    const onSessionExpired = () => setSessionExpired(true);
+    window.addEventListener('liff-session-expired', onSessionExpired);
+    return () => window.removeEventListener('liff-session-expired', onSessionExpired);
   }, []);
 
   if (!ready) return <div className="min-h-screen bg-gray-100 flex items-center justify-center text-gray-500">読み込み中...</div>;
   if (!initOk) return <div className="min-h-screen bg-gray-100 flex items-center justify-center text-rose-600 px-4 text-center">LIFF 初期化失敗（エンドポイントURL / LIFF IDを確認してください）</div>;
-  if (!isLoggedIn()) {
+  if (sessionExpired || !isLoggedIn()) {
     return (
       <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center gap-4">
         <h1 className="text-2xl font-bold text-blue-600">Nutrition Dashboard</h1>
-        <button onClick={login} className="px-6 py-3 rounded-lg bg-green-500 text-white font-bold">LINEでログイン</button>
+        {sessionExpired && <p className="text-sm text-gray-600">セッションの有効期限が切れました。再ログインしてください。</p>}
+        <button onClick={() => { setSessionExpired(false); login(); }} className="px-6 py-3 rounded-lg bg-green-500 text-white font-bold">LINEでログイン</button>
       </div>
     );
   }

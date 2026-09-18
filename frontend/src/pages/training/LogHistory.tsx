@@ -19,6 +19,7 @@ export default function LogHistory() {
   const [anchor, setAnchor] = useState(() => new Date());
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const period = useMemo(() => {
     if (view === 'list') {
@@ -94,15 +95,20 @@ export default function LogHistory() {
   };
 
   const remove = async (id: string) => {
+    if (deletingId) return;
     if (!window.confirm('この記録を削除しますか？')) return;
     setError(null);
+    setDeletingId(id);
+    setLoading(true);
     try {
       await callApi('deleteTrainingLog', { training_log_id: id });
-      setLoading(true);
-      callApi('getTrainingLogs', { from: key(period.from), to: key(period.to) })
-        .then((d: any) => { setLogs(d.logs); })
-        .finally(() => setLoading(false));
+      const refreshed: any = await callApi('getTrainingLogs', { from: key(period.from), to: key(period.to) });
+      setLogs(refreshed.logs);
     } catch (e: any) { setError(e.message); }
+    finally {
+      setDeletingId(null);
+      setLoading(false);
+    }
   };
 
   const LogRow = ({ l }: { l: any }) => (
@@ -117,7 +123,7 @@ export default function LogHistory() {
         </p>
       </button>
       <p className="text-sm font-bold text-emerald-600">{l.estimated_calories} kcal</p>
-      <button onClick={() => remove(l.training_log_id)} className="px-2 py-1 text-xs text-rose-600 bg-rose-50 rounded">削除</button>
+      <button disabled={!!deletingId} onClick={() => remove(l.training_log_id)} className="px-2 py-1 text-xs text-rose-600 bg-rose-50 rounded disabled:opacity-50">{deletingId === l.training_log_id ? '削除中...' : '削除'}</button>
     </div>
   );
 

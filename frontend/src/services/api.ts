@@ -1,6 +1,18 @@
-import { getAccessToken } from './liff';
+import { getAccessToken, notifySessionExpired } from './liff';
 
+const API_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_GAS_URL || '/api';
 const GAS_URL = import.meta.env.VITE_GAS_URL;
+
+function endpointForAction(_action: string): { url: string; backend: 'vercel' | 'gas' } {
+  // With VITE_API_URL configured, Vercel is the only browser endpoint.
+  // Read actions use Sheets API; mutations are server-side proxied to GAS
+  // until Vercel has a distributed lock/dedup store.
+  if (import.meta.env.VITE_API_URL) {
+    return { url: API_URL, backend: 'vercel' };
+  }
+  if (GAS_URL) return { url: GAS_URL, backend: 'gas' };
+  return { url: API_URL, backend: 'vercel' };
+}
 
 // 本番環境では通常ログを出さず、調査時だけ localStorage から有効化する。
 // Dev 環境では計測ログと debug payload を有効にする。
@@ -34,38 +46,47 @@ function readKey(action: string, params: Record<string, unknown>) {
 }
 
 async function fetchWithRetry(body: string, action: string, requestId: string): Promise<Response> {
+  const endpoint = endpointForAction(action);
   const init: RequestInit = {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body,
   };
+  const isVercel = endpoint.backend === 'vercel';
+  const isWriteLike = !action.startsWith('get') && action !== 'health';
+  const maxAttempts = isVercel ? (isWriteLike ? 1 : 2) : 3;
   let lastStatus = 0;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const attemptStart = performance.now();
+    const controller = isVercel ? new AbortController() : null;
+    const timeoutId = controller ? window.setTimeout(() => controller.abort(), 8000) : null;
     try {
-      const res = await fetch(GAS_URL, init);
+      const res = await fetch(endpoint.url, controller ? { ...init, signal: controller.signal } : init);
       const duration = Math.round(performance.now() - attemptStart);
-      if (res.ok || RETRYABLE.indexOf(res.status) === -1) {
+      if (res.ok || isVercel || RETRYABLE.indexOf(res.status) === -1) {
         if (DEBUG) {
-          console.log(`[API Attempt] ${action} requestId=${requestId} #${attempt + 1} status=${res.status} ${duration}ms`);
+          console.log(`[API Attempt] ${action} backend=${endpoint.backend} requestId=${requestId} #${attempt + 1} status=${res.status} ${duration}ms`);
         }
         return res;
       }
       if (DEBUG) {
-        console.warn(`[API Retry] ${action} requestId=${requestId} #${attempt + 1} status=${res.status} ${duration}ms`);
+        console.warn(`[API Retry] ${action} backend=${endpoint.backend} requestId=${requestId} #${attempt + 1} status=${res.status} ${duration}ms`);
       }
       lastStatus = res.status;
     } catch (error) {
       const duration = Math.round(performance.now() - attemptStart);
       if (DEBUG) {
         const reason = error instanceof Error ? error.message : String(error);
-        console.warn(`[API Retry] ${action} requestId=${requestId} #${attempt + 1} network_or_cors ${duration}ms ${reason}`);
+        console.warn(`[API Retry] ${action} backend=${endpoint.backend} requestId=${requestId} #${attempt + 1} network_or_cors ${duration}ms ${reason}`);
       }
       lastStatus = 0;
+    } finally {
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
     }
-    if (attempt < 2) {
-      if (DEBUG) console.log(`[API Retry] ${action} requestId=${requestId} waiting=900ms`);
-      await new Promise((r) => setTimeout(r, 900));
+    if (attempt < maxAttempts - 1) {
+      const waitMs = isVercel ? 250 : 900;
+      if (DEBUG) console.log(`[API Retry] ${action} backend=${endpoint.backend} requestId=${requestId} waiting=${waitMs}ms`);
+      await new Promise((r) => setTimeout(r, waitMs));
     }
   }
   if (lastStatus === 0) {
@@ -89,7 +110,10 @@ export async function callApi<T = unknown>(
 
   const request = (async () => {
     const token = getAccessToken();
-    if (!token) throw new ApiError('AUTH_FAILED', 'LINEトークン未取得です。再ログインしてください');
+    if (!token) {
+      notifySessionExpired();
+      throw new ApiError('AUTH_FAILED', 'LINEトークン未取得です。再ログインしてください');
+    }
     const payload = DEBUG ? { token, action, params, debug: 1 } : { token, action, params };
     const res = await fetchWithRetry(JSON.stringify(payload), action, requestId);
     const json = await res.json();
@@ -106,6 +130,7 @@ export async function callApi<T = unknown>(
 
     if (json?.ok === true) return json.data as T;
     if (json?.ok === false) {
+      if (json.error?.code === 'AUTH_FAILED') notifySessionExpired();
       throw new ApiError(json.error?.code ?? 'SERVER_ERROR', json.error?.message ?? '不明なエラー');
     }
     if (json?.error) throw new ApiError('SERVER_ERROR', json.error);

@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "typecheck:api": "tsc -p tsconfig.api.json --noEmit",
+    "test:api": "node --experimental-strip-types scripts/api-smoke.mjs",
+    "test:api:parity": "node --experimental-strip-types scripts/gas-read-parity-smoke.mjs",
+    "build": "npm run typecheck:api && tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"
   },
