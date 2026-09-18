@@ -41,7 +41,9 @@ function doPost(e) {
     return isLegacy ? legacyError_('Token is Required') : fail_('AUTH_FAILED', 'Token is required');
   }
 
+  const authStart = isDebug ? Date.now() : 0;
   const userId = checkAuth(token);
+  if (isDebug) perfAddProcessing_('auth_ms', Date.now() - authStart);
   if (isDebug) perfMark_('auth');
 
   if (!userId) {
@@ -66,6 +68,8 @@ function doPost(e) {
     }
 
     if (isDebug) perfMark_('dispatch_done');
+
+    if (isDebug) perfMark_('response_object_ready');
 
     // デバッグ情報の付与（データオブジェクトに直接追加）
     if (isDebug && result && typeof result === 'object') {

@@ -23,14 +23,34 @@ function sheetValues_(name) {
 }
 function getRows(sheetName, filterFn) {
   const values = sheetValues_(sheetName);
-  if (values.length < 2) return [];
+  const measure = !!__perf;
+  const processingStart = measure ? Date.now() : 0;
+  if (values.length < 2) {
+    perfRows_(sheetName, 0, 0, 0, 0);
+    if (measure) perfAddProcessing_('getRows_ms', Date.now() - processingStart);
+    if (measure) perfCountProcessing_('getRows_calls', 1);
+    return [];
+  }
   const header = values[0];
   const out = [];
+  let objectifyMs = 0;
+  let filterMs = 0;
   for (let i = 1; i < values.length; i++) {
+    const objectifyStart = measure ? Date.now() : 0;
     const obj = {};
     for (let c = 0; c < header.length; c++) obj[header[c]] = values[i][c];
-    if (!filterFn || filterFn(obj)) out.push(obj);
+    if (measure) objectifyMs += Date.now() - objectifyStart;
+    let included = true;
+    if (filterFn) {
+      const filterStart = measure ? Date.now() : 0;
+      included = filterFn(obj);
+      if (measure) filterMs += Date.now() - filterStart;
+    }
+    if (included) out.push(obj);
   }
+  perfRows_(sheetName, objectifyMs, filterMs, values.length - 1, out.length);
+  if (measure) perfAddProcessing_('getRows_ms', Date.now() - processingStart);
+  if (measure) perfCountProcessing_('getRows_calls', 1);
   return out;
 }
 

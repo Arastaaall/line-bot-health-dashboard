@@ -148,6 +148,7 @@ function nfReferences_(gender, age) {
 }
 
 function apiGetNutritionAnalysis(userId, params) {
+  perfMark_('nutrition_start');
   const user = getUserRecord_(userId);
   const range = String(params.range || '7d');
   if (['7d', '30d', '90d', '1y', 'all'].indexOf(range) === -1) {
@@ -156,9 +157,13 @@ function apiGetNutritionAnalysis(userId, params) {
   const effRange = user.isPremium ? range : '7d';
   const tier = user.isPremium ? 'p' : 'f';
   const data = cached_('nutrition_' + userId + '_' + effRange + '_' + tier, 120, function () {
-    return buildNutritionAnalysis_(userId, effRange);
+    perfMark_('nutrition_build_start');
+    const result = buildNutritionAnalysis_(userId, effRange);
+    perfMark_('nutrition_build_end');
+    return result;
   });
   data.plan_limits = { range_days: user.isPremium ? null : 7 };
+  perfMark_('nutrition_end');
   return { ok: true, data: data };
 }
 

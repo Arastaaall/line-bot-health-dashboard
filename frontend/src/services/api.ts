@@ -22,12 +22,18 @@ export class ApiError extends Error {
 
 const RETRYABLE = [404, 500, 502, 503];
 const inFlightReads = new Map<string, Promise<unknown>>();
+let requestSequence = 0;
+
+function nextRequestId() {
+  requestSequence += 1;
+  return `${Date.now().toString(36)}-${requestSequence.toString(36)}`;
+}
 
 function readKey(action: string, params: Record<string, unknown>) {
   return action + ':' + JSON.stringify(params);
 }
 
-async function fetchWithRetry(body: string, action: string): Promise<Response> {
+async function fetchWithRetry(body: string, action: string, requestId: string): Promise<Response> {
   const init: RequestInit = {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -41,24 +47,24 @@ async function fetchWithRetry(body: string, action: string): Promise<Response> {
       const duration = Math.round(performance.now() - attemptStart);
       if (res.ok || RETRYABLE.indexOf(res.status) === -1) {
         if (DEBUG) {
-          console.log(`[API Attempt] ${action} #${attempt + 1} status=${res.status} ${duration}ms`);
+          console.log(`[API Attempt] ${action} requestId=${requestId} #${attempt + 1} status=${res.status} ${duration}ms`);
         }
         return res;
       }
       if (DEBUG) {
-        console.warn(`[API Retry] ${action} #${attempt + 1} status=${res.status} ${duration}ms`);
+        console.warn(`[API Retry] ${action} requestId=${requestId} #${attempt + 1} status=${res.status} ${duration}ms`);
       }
       lastStatus = res.status;
     } catch (error) {
       const duration = Math.round(performance.now() - attemptStart);
       if (DEBUG) {
         const reason = error instanceof Error ? error.message : String(error);
-        console.warn(`[API Retry] ${action} #${attempt + 1} network_or_cors ${duration}ms ${reason}`);
+        console.warn(`[API Retry] ${action} requestId=${requestId} #${attempt + 1} network_or_cors ${duration}ms ${reason}`);
       }
       lastStatus = 0;
     }
     if (attempt < 2) {
-      if (DEBUG) console.log(`[API Retry] ${action} waiting=900ms`);
+      if (DEBUG) console.log(`[API Retry] ${action} requestId=${requestId} waiting=900ms`);
       await new Promise((r) => setTimeout(r, 900));
     }
   }
@@ -73,7 +79,8 @@ export async function callApi<T = unknown>(
   params: Record<string, unknown> = {},
 ): Promise<T> {
   const startTime = performance.now();
-  if (DEBUG) console.log(`[API Start] ${action} @ ${Math.round(startTime)}ms`);
+  const requestId = nextRequestId();
+  if (DEBUG) console.log(`[API Start] ${action} requestId=${requestId} @ ${Math.round(startTime)}ms`);
 
   const isRead = action.startsWith('get');
   const key = isRead ? readKey(action, params) : '';
@@ -84,12 +91,12 @@ export async function callApi<T = unknown>(
     const token = getAccessToken();
     if (!token) throw new ApiError('AUTH_FAILED', 'LINEトークン未取得です。再ログインしてください');
     const payload = DEBUG ? { token, action, params, debug: 1 } : { token, action, params };
-    const res = await fetchWithRetry(JSON.stringify(payload), action);
+    const res = await fetchWithRetry(JSON.stringify(payload), action, requestId);
     const json = await res.json();
     
     const duration = Math.round(performance.now() - startTime);
     if (DEBUG) {
-      console.log(`[API End] ${action} @ ${Math.round(performance.now())}ms (${duration}ms)`);
+      console.log(`[API End] ${action} requestId=${requestId} @ ${Math.round(performance.now())}ms (${duration}ms)`);
 
       // GAS内部の計測データ(_perf)があればコンソールに出力
       if ((json as any)?._perf) {

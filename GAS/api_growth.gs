@@ -20,14 +20,31 @@ function apiGetGrowthSummary(userId, params) {
 // 各分析は既存の個別キャッシュを利用するため、既存actionの契約は変更しない。
 function apiGetGrowthAll(userId, params) {
   const range = params && params.range ? params.range : '7d';
+  perfMark_('growth_all_start');
+  const summaryStart = __perf ? Date.now() : 0;
+  const summary = apiGetGrowthSummary(userId, { range: range }).data;
+  if (__perf) perfAddProcessing_('growth_summary_ms', Date.now() - summaryStart);
+  const trainingStart = __perf ? Date.now() : 0;
+  const training = apiGetTrainingAnalysis(userId, { range: range }).data;
+  if (__perf) perfAddProcessing_('growth_training_ms', Date.now() - trainingStart);
+  const mealStart = __perf ? Date.now() : 0;
+  const meal = apiGetMealAnalysis(userId, { range: range }).data;
+  if (__perf) perfAddProcessing_('growth_meal_ms', Date.now() - mealStart);
+  const bodyStart = __perf ? Date.now() : 0;
+  const body = apiGetBodyAnalysis(userId, { range: range }).data;
+  if (__perf) perfAddProcessing_('growth_body_ms', Date.now() - bodyStart);
+  const menusStart = __perf ? Date.now() : 0;
+  const menus = apiGetTrainingMenus(userId, {}).data;
+  if (__perf) perfAddProcessing_('growth_menus_ms', Date.now() - menusStart);
+  perfMark_('growth_all_end');
   return {
     ok: true,
     data: {
-      summary: apiGetGrowthSummary(userId, { range: range }).data,
-      training: apiGetTrainingAnalysis(userId, { range: range }).data,
-      meal: apiGetMealAnalysis(userId, { range: range }).data,
-      body: apiGetBodyAnalysis(userId, { range: range }).data,
-      menus: apiGetTrainingMenus(userId, {}).data
+      summary: summary,
+      training: training,
+      meal: meal,
+      body: body,
+      menus: menus
     }
   };
 }

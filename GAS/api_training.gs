@@ -48,13 +48,19 @@ function cached_(key, ttl, fn) {
       __perf.cache[key] = {
         hit: true,
         get_ms: getMs,
+        build_ms: 0,
+        put_ms: 0,
+        put_ok: true,
+        over_100k: false,
         chars: hit.length,
         bytes: Utilities.newBlob(hit).getBytes().length,
       };
     }
     return JSON.parse(hit);
   }
+  const buildStart = __perf ? Date.now() : 0;
   const data = fn();
+  const buildMs = __perf ? Date.now() - buildStart : 0;
   const payload = JSON.stringify(data);
   const payloadBytes = __perf ? Utilities.newBlob(payload).getBytes().length : 0;
   const putStart = Date.now();
@@ -65,6 +71,7 @@ function cached_(key, ttl, fn) {
     __perf.cache[key] = {
       hit: false,
       get_ms: getMs,
+      build_ms: buildMs,
       chars: payload.length,
       bytes: payloadBytes,
       over_100k: payloadBytes > 100 * 1024,
@@ -191,10 +198,12 @@ function apiGetTrainingLogs(userId, params) {
     from = params.from || dateKeyOf_(d7);
     to = params.to || todayKey_();
   }
+  perfMark_('tlogs_filter_start');
   const filtered = all.filter(function (l) {
     const k = dateKeyOf_(new Date(l['training_date']));
     return k >= from && k <= to;
   });
+  perfMark_('tlogs_filter_end');
   return { ok: true, data: { logs: filtered, from: from, to: to, range_restricted: !user.isPremium } };
 }
 
@@ -254,13 +263,28 @@ function apiGetTrainingLogDetail(userId, params) {
 }
 
 function apiGetDashboardAll(userId, params) {
+  perfMark_('dashboard_all_start');
   const user = getUserRecord_(userId);
+  perfMark_('dashboard_user_ready');
   const tier = user.isPremium ? 'p' : 'f';
   
   // 1. キャッシュ確認 (growth_training_7d)
   let glance = null;
   const cacheKey = 'growth_training_' + userId + '7d' + tier;
+  const glanceCacheStart = __perf ? Date.now() : 0;
   const hit = CacheService.getUserCache().get(cacheKey);
+  if (__perf) {
+    __perf.cache = __perf.cache || {};
+    __perf.cache.dashboard_glance = {
+      hit: !!hit,
+      get_ms: Date.now() - glanceCacheStart,
+      build_ms: 0,
+      put_ms: 0,
+      put_ok: true,
+      over_100k: false,
+      bytes: hit ? Utilities.newBlob(hit).getBytes().length : 0
+    };
+  }
   if (hit) {
     try {
       const b = JSON.parse(hit).blocks || {};
@@ -269,24 +293,36 @@ function apiGetDashboardAll(userId, params) {
       }
     } catch (e) {}
   }
+  perfMark_('dashboard_glance_cache_checked');
   
   // 2. キャッシュがなければ軽量計算（D1/D2/R2のみ）
   if (!glance) {
+    perfMark_('dashboard_glance_build_start');
     const tLogsAll = getRows('Training_Logs', function (r) { return String(r['user_id']) === String(userId); });
     const ids = {};
     tLogsAll.forEach(function (l) { ids[String(l['training_log_id'])] = true; });
     const setsByLog = gSetsByLog_(getRows('Training_Sets', function (s) { return !!ids[String(s['training_log_id'])]; }));
     const mLogs = getRows('logs', function (r) { return String(r['user_id']) === String(userId); });
+    const aggregationStart = __perf ? Date.now() : 0;
     glance = buildGlanceBlocks_(tLogsAll, setsByLog, mLogs);
+    if (__perf) perfAddProcessing_('dashboard_aggregation_ms', Date.now() - aggregationStart);
+    perfMark_('dashboard_glance_build_end');
   }
 
+  const summaryStart = __perf ? Date.now() : 0;
+  const summary = apiGetDailyCalorieSummary(userId, params).data;
+  if (__perf) perfAddProcessing_('dashboard_summary_ms', Date.now() - summaryStart);
+  const goalStart = __perf ? Date.now() : 0;
+  const goalBanner = buildGoalPeriodBanner_(userId);
+  if (__perf) perfAddProcessing_('dashboard_goal_banner_ms', Date.now() - goalStart);
+  perfMark_('dashboard_response_object_ready');
   return {
     ok: true,
     data: {
-      summary: apiGetDailyCalorieSummary(userId, params).data,
+      summary: summary,
       dashboard: { user: { name: user.name, isPremium: user.isPremium }, glance: glance }, // ← glanceバグ修正
       glance: glance, // 互換用エイリアス
-      goal_banner: buildGoalPeriodBanner_(userId)
+      goal_banner: goalBanner
     }
   };
 }
