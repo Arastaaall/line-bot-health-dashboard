@@ -1,0 +1,2 @@
+# Vercel が .ts ソースではなくバンドル済み .js を Function として使うよう除外
+api/index.ts
