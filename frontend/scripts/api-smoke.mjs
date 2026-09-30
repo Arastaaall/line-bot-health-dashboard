@@ -60,7 +60,6 @@ async function invoke(method, body) {
   return capture.output;
 }
 
-process.env.VITE_GAS_URL = 'https://gas.example.invalid/exec';
 globalThis.fetch = async (url) => {
   if (String(url).includes('api.line.me')) {
     return new Response(JSON.stringify({ userId: 'smoke-user' }), { status: 200 });
@@ -70,16 +69,12 @@ globalThis.fetch = async (url) => {
 
 const options = await invoke('OPTIONS', {});
 const missingToken = await invoke('POST', { action: 'health' });
+const mutationMissingToken = await invoke('POST', { action: 'deleteTrainingLog', params: { training_log_id: 'smoke-log' } });
 const health = await invoke('POST', { token: 'smoke-token', action: 'health' });
-const mutation = await invoke('POST', {
-  token: 'smoke-token',
-  action: 'deleteTrainingLog',
-  params: { training_log_id: 'smoke-log' },
-});
 
 if (options.statusCode !== 204) throw new Error('OPTIONS smoke failed');
 if (missingToken.statusCode !== 401) throw new Error('auth guard smoke failed');
+if (mutationMissingToken.statusCode !== 401) throw new Error('mutation auth guard smoke failed');
 if (health.body?.ok !== true) throw new Error('health smoke failed');
-if (mutation.body?.ok !== true || mutation.body?.data?.smoke !== true) throw new Error('mutation proxy smoke failed');
 
-console.log(`api-smoke passed: read=${readActions.length}, handler=ok`);
+console.log(`api-smoke passed: read=${readActions.length}, auth-and-handler=ok`);

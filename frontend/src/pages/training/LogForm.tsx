@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { callApi } from '../../services/api';
 import ExercisePicker from '../../components/ExercisePicker';
 import type { PickedExercise } from '../../components/ExercisePicker';
@@ -8,6 +8,7 @@ import { getTrainingFormInitCached, addLocalTrainingLogs } from '../../services/
 
 const RPE_LABELS = ['楽だった', '余裕あり', 'まあまあ', 'かなりきつい', '限界', '地獄'];
 const OTHER = 'その他';
+const newClientId = () => `${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
 function todayKey() {
   const d = new Date();
@@ -44,6 +45,8 @@ export default function LogForm() {
   const [groupTab, setGroupTab] = useState<string>('');
   const [inputs, setInputs] = useState<Record<string, { sets: SetRow[]; duration: string; distance: string }>>({});
   const [batchResult, setBatchResult] = useState<{ name: string; calories: number }[] | null>(null);
+  const createLogClientIdRef = useRef(newClientId());
+  const batchClientIdRef = useRef(newClientId());
   const [searchParams] = useSearchParams();
   const focusMenuId = searchParams.get('menu');
 
@@ -103,7 +106,7 @@ export default function LogForm() {
     setSaving(true);
     try {
       const params: any = {
-        client_id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        client_id: createLogClientIdRef.current,
         training_date: date,
         training_type: effectiveType,
         duration_min: duration === '' ? null : Number(duration),
@@ -124,6 +127,7 @@ export default function LogForm() {
         params.sets = [];
       }
       const res: any = await callApi('createTrainingLog', params);
+      createLogClientIdRef.current = newClientId();
       await addLocalTrainingLogs([{
         training_log_id: res.training_log_id,
         exercise_name_snapshot: picked.master?.exercise_name || params.exercise_name || '',
@@ -186,9 +190,10 @@ export default function LogForm() {
 
       // 一括API呼び出し（1回で全件）
       const res: any = await callApi('createTrainingLogsBatch', {
-        client_id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        client_id: batchClientIdRef.current,
         logs: batchLogs,
       });
+      batchClientIdRef.current = newClientId();
 
       const successResults = res.results.filter((r: any) => r.ok).map((r: any) => ({
         name: batchLogs[r.index].menu_id ? menus.find((m) => m.menu_id === batchLogs[r.index].menu_id)?.menu_name || '' : '',

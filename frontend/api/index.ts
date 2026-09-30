@@ -1,6 +1,6 @@
 import { checkAuth } from '../src/server/auth.ts';
 import { createRequestContext } from '../src/server/context.ts';
-import { isMutationAction, proxyMutation } from '../src/server/gasProxy.ts';
+import { dispatchMutation, isMutationAction } from '../src/server/mutationApi.ts';
 import { dispatchRead } from '../src/server/readApi.ts';
 import type { ApiRequest, ApiResult } from '../src/server/types.ts';
 
@@ -14,6 +14,14 @@ type VercelResponse = {
 
 function failure(code: string, message: string): ApiResult<never> {
   return { ok: false, error: { code, message } };
+}
+
+function statusFor(result: ApiResult<unknown>): number {
+  if (result.ok) return 200;
+  if (result.error.code === 'AUTH_FAILED') return 401;
+  if (result.error.code === 'NOT_FOUND') return 404;
+  if (result.error.code === 'SERVER_ERROR') return 503;
+  return 400;
 }
 
 async function requestBody(req: VercelRequest): Promise<ApiRequest> {
@@ -47,18 +55,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const params = request.params && typeof request.params === 'object' ? request.params : {};
   if (!request.token) { res.status(401).json(failure('AUTH_FAILED', 'Token is required')); return; }
 
-  // Mutation remains executed by the original GAS implementation until a
-  // shared distributed lock/dedup store is available for Vercel.
-  if (isMutationAction(action)) {
-    try {
-      const proxied = await proxyMutation(request);
-      res.status(proxied.status).json(proxied.body);
-    } catch {
-      res.status(502).json(failure('GAS_PROXY_ERROR', 'GASバックエンドへの転送に失敗しました'));
-    }
-    return;
-  }
-
   const userId = await checkAuth(request.token);
   if (!userId) { res.status(401).json(failure('AUTH_FAILED', 'Invalid token or LINE API error')); return; }
 
@@ -68,8 +64,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return;
     }
     const context = createRequestContext();
-    const result = await dispatchRead(context, userId, action, params);
-    res.status(result.ok ? 200 : result.error.code === 'NOT_FOUND' ? 404 : 400).json(result);
+    const result = isMutationAction(action)
+      ? await dispatchMutation(context, userId, action, params)
+      : await dispatchRead(context, userId, action, params);
+    res.status(statusFor(result)).json(result);
   } catch {
     // Deliberately do not return exception details: they may contain provider configuration.
     res.status(500).json(failure('SERVER_ERROR', 'サーバー処理に失敗しました'));

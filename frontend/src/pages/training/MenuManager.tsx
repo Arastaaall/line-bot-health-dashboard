@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { callApi } from '../../services/api';
 import ExercisePicker from '../../components/ExercisePicker';
 import type { PickedExercise } from '../../components/ExercisePicker';
@@ -7,6 +7,7 @@ import Loading from '../../components/Loading';
 import { getTrainingFormInitCached, invalidateTrainingFormInitCache } from '../../services/trainingCache';
 
 const OTHER = 'その他';
+const newClientId = () => `${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
 export default function MenuManager() {
   const [loading, setLoading] = useState(true);
@@ -23,7 +24,7 @@ export default function MenuManager() {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [clientId, setClientId] = useState(() => `${Date.now()}_${Math.random().toString(36).slice(2)}`);
+  const clientIdRef = useRef(newClientId());
 
   const load = () => {
     getTrainingFormInitCached()
@@ -110,11 +111,12 @@ export default function MenuManager() {
       const params: any = {
         menu_name: menuName,
         training_group: group.trim() || OTHER,
-        client_id: clientId,
+        client_id: clientIdRef.current,
       };
       if (picked.master) params.master_id = picked.master.master_id;
       else params.training_type = freeType;
       await callApi('createTrainingMenu', params);
+      clientIdRef.current = newClientId();
       invalidateTrainingFormInitCache();
       setPicked({ master: null, freeName: '' });
       setName('');
@@ -124,10 +126,7 @@ export default function MenuManager() {
     } catch (e: any) {
       if (e.code === 'LIMIT_EXCEEDED') setLimitMsg(e.message);
       else setError(e.message);
-    } finally {
-      setSaving(false);
-      setClientId(`${Date.now()}_${Math.random().toString(36).slice(2)}`);
-    }
+    } finally { setSaving(false); }
   };
 
   const del = async (id: string) => {

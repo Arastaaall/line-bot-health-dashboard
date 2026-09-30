@@ -4,6 +4,10 @@ import type { SheetRow, SheetValue } from './types.ts';
 
 type GoogleValuesResponse = { values?: SheetValue[][] };
 type GoogleBatchValuesResponse = { valueRanges?: Array<{ values?: SheetValue[][] }> };
+export type DateTimeRenderOption = 'FORMATTED_STRING' | 'SERIAL_NUMBER';
+export type SheetReadOptions = { dateTimeRenderOption?: DateTimeRenderOption };
+export type SheetProperties = { sheetId: number; title: string };
+export type GoogleSheetRequest = Record<string, unknown>;
 
 let accessToken: { value: string; expiresAt: number } | null = null;
 
@@ -58,19 +62,20 @@ function sheetRange(sheetName: string): string {
 
 export class SheetsClient {
   private readonly spreadsheetId: string;
+  private sheetPropertiesPromise: Promise<Map<string, SheetProperties>> | null = null;
 
   constructor() {
     this.spreadsheetId = requiredEnv('GOOGLE_SPREADSHEET_ID');
   }
 
-  async values(sheetName: string): Promise<SheetValue[][]> {
+  async values(sheetName: string, options: SheetReadOptions = {}): Promise<SheetValue[][]> {
     const token = await getGoogleAccessToken();
     const query = new URLSearchParams({
       majorDimension: 'ROWS',
       // Preserve GAS getValues() number/boolean types while keeping date cells
       // readable instead of exposing Sheets' serial-date numbers.
       valueRenderOption: 'UNFORMATTED_VALUE',
-      dateTimeRenderOption: 'FORMATTED_STRING',
+      dateTimeRenderOption: options.dateTimeRenderOption ?? 'FORMATTED_STRING',
     });
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(this.spreadsheetId)}/values/${encodeURIComponent(sheetRange(sheetName))}?${query}`;
     const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
@@ -79,12 +84,12 @@ export class SheetsClient {
     return json.values ?? [[]];
   }
 
-  async batchValues(sheetNames: string[]): Promise<Map<string, SheetValue[][]>> {
+  async batchValues(sheetNames: string[], options: SheetReadOptions = {}): Promise<Map<string, SheetValue[][]>> {
     const token = await getGoogleAccessToken();
     const query = new URLSearchParams({
       majorDimension: 'ROWS',
       valueRenderOption: 'UNFORMATTED_VALUE',
-      dateTimeRenderOption: 'FORMATTED_STRING',
+      dateTimeRenderOption: options.dateTimeRenderOption ?? 'FORMATTED_STRING',
     });
     sheetNames.forEach((sheetName) => query.append('ranges', sheetRange(sheetName)));
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(this.spreadsheetId)}/values:batchGet?${query}`;
@@ -97,45 +102,84 @@ export class SheetsClient {
     });
     return result;
   }
-}
 
-export async function sheetValues(context: RequestContext, sheetName: string): Promise<SheetValue[][]> {
-  const cached = context.sheetMemo.get(sheetName);
-  if (cached) return cached;
-  const pending = context.sheetPending.get(sheetName);
-  if (pending) return pending;
+  async sheetProperties(): Promise<Map<string, SheetProperties>> {
+    if (this.sheetPropertiesPromise) return this.sheetPropertiesPromise;
+    this.sheetPropertiesPromise = (async () => {
+      const token = await getGoogleAccessToken();
+      const query = new URLSearchParams({ fields: 'sheets(properties(sheetId,title))' });
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(this.spreadsheetId)}?${query}`;
+      const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) throw new Error('Google Sheets metadata read failed');
+      const json = await response.json() as { sheets?: Array<{ properties?: SheetProperties }> };
+      const result = new Map<string, SheetProperties>();
+      (json.sheets ?? []).forEach((sheet) => {
+        if (sheet.properties?.title && Number.isFinite(sheet.properties.sheetId)) result.set(sheet.properties.title, sheet.properties);
+      });
+      return result;
+    })();
+    try {
+      return await this.sheetPropertiesPromise;
+    } catch (error) {
+      this.sheetPropertiesPromise = null;
+      throw error;
+    }
+  }
 
-  const request = context.sheets.values(sheetName);
-  context.sheetPending.set(sheetName, request);
-  try {
-    const values = await request;
-    context.sheetMemo.set(sheetName, values);
-    return values;
-  } finally {
-    context.sheetPending.delete(sheetName);
+  async batchUpdate(requests: GoogleSheetRequest[]): Promise<void> {
+    const token = await getGoogleAccessToken();
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(this.spreadsheetId)}:batchUpdate`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requests }),
+    });
+    if (!response.ok) throw new Error('Google Sheets write failed');
   }
 }
 
-export async function batchSheetValues(context: RequestContext, sheetNames: string[]): Promise<Map<string, SheetValue[][]>> {
+function readCacheKey(sheetName: string, options: SheetReadOptions): string {
+  return `${sheetName}::${options.dateTimeRenderOption ?? 'FORMATTED_STRING'}`;
+}
+
+export async function sheetValues(context: RequestContext, sheetName: string, options: SheetReadOptions = {}): Promise<SheetValue[][]> {
+  const key = readCacheKey(sheetName, options);
+  const cached = context.sheetMemo.get(key);
+  if (cached) return cached;
+  const pending = context.sheetPending.get(key);
+  if (pending) return pending;
+
+  const request = context.sheets.values(sheetName, options);
+  context.sheetPending.set(key, request);
+  try {
+    const values = await request;
+    context.sheetMemo.set(key, values);
+    return values;
+  } finally {
+    context.sheetPending.delete(key);
+  }
+}
+
+export async function batchSheetValues(context: RequestContext, sheetNames: string[], options: SheetReadOptions = {}): Promise<Map<string, SheetValue[][]>> {
   const names = [...new Set(sheetNames)];
-  const missing = names.filter((name) => !context.sheetMemo.has(name) && !context.sheetPending.has(name));
+  const missing = names.filter((name) => !context.sheetMemo.has(readCacheKey(name, options)) && !context.sheetPending.has(readCacheKey(name, options)));
   if (missing.length) {
-    const batch = context.sheets.batchValues(missing);
+    const batch = context.sheets.batchValues(missing, options);
     missing.forEach((name) => {
       const pending = batch.then((values) => {
         const result = values.get(name) ?? [[]];
-        context.sheetMemo.set(name, result);
+        context.sheetMemo.set(readCacheKey(name, options), result);
         return result;
       }).finally(() => {
-        context.sheetPending.delete(name);
+        context.sheetPending.delete(readCacheKey(name, options));
       });
-      context.sheetPending.set(name, pending);
+      context.sheetPending.set(readCacheKey(name, options), pending);
     });
   }
 
   const result = new Map<string, SheetValue[][]>();
   await Promise.all(names.map(async (name) => {
-    result.set(name, await sheetValues(context, name));
+    result.set(name, await sheetValues(context, name, options));
   }));
   return result;
 }

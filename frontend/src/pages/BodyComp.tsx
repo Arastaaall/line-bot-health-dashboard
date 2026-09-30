@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { callApi } from '../services/api';
 import { getUserId } from '../services/liff';
 import { loadSnapshot, saveSnapshot } from '../services/snapshot';
@@ -17,6 +17,7 @@ function fmt(dt: any) {
 }
 
 const VISCERAL_NOTE = '＊内臓脂肪レベルは測定機器が返す値をそのまま表示した参考値です。異なる機器間での値の比較はできません。';
+const newClientId = () => `${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
 function FormModal({ onClose, onSaved }: { onClose: () => void; onSaved: (params: any, result: any) => void | Promise<void> }) {
   const [device, setDevice] = useState('home_scale');
@@ -33,6 +34,7 @@ function FormModal({ onClose, onSaved }: { onClose: () => void; onSaved: (params
   const [wc, setWc] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const clientIdRef = useRef(newClientId());
 
   const isInbody = device === 'inbody';
   const showDetail = isInbody || device === 'home_scale';
@@ -48,7 +50,7 @@ function FormModal({ onClose, onSaved }: { onClose: () => void; onSaved: (params
         measurement_device: device,
         weight_kg: Number(weight),
         memo,
-        client_id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        client_id: clientIdRef.current,
       };
       if (showDetail) {
         if (bf !== '') params.body_fat_pct = Number(bf);
@@ -63,6 +65,7 @@ function FormModal({ onClose, onSaved }: { onClose: () => void; onSaved: (params
       }
       const result: any = await callApi('createBodyCompositionLog', params);
       await onSaved(params, result);
+      clientIdRef.current = newClientId();
     } catch (e: any) {
       setError(e.message);
     } finally {

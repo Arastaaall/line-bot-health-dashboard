@@ -1,24 +1,14 @@
 import { getAccessToken, notifySessionExpired } from './liff';
 
-const API_URL = import.meta.env.VITE_API_URL || import.meta.env.VITE_GAS_URL || '/api';
-const GAS_URL = import.meta.env.VITE_GAS_URL;
+const API_URL = import.meta.env.VITE_API_URL || '/api';
 
-function endpointForAction(_action: string): { url: string; backend: 'vercel' | 'gas' } {
-  // With VITE_API_URL configured, Vercel is the only browser endpoint.
-  // Read actions use Sheets API; mutations are server-side proxied to GAS
-  // until Vercel has a distributed lock/dedup store.
-  if (import.meta.env.VITE_API_URL) {
-    return { url: API_URL, backend: 'vercel' };
-  }
-  if (GAS_URL) return { url: GAS_URL, backend: 'gas' };
-  return { url: API_URL, backend: 'vercel' };
-}
+function endpointForAction(_action: string): string { return API_URL; }
 
 // 本番環境では通常ログを出さず、調査時だけ localStorage から有効化する。
 // Dev 環境では計測ログと debug payload を有効にする。
 const DEBUG = import.meta.env.DEV || (() => {
   try {
-    return typeof localStorage !== 'undefined' && localStorage.getItem('gasdebug') === '1';
+    return typeof localStorage !== 'undefined' && localStorage.getItem('apidbg') === '1';
   } catch {
     return false;
   }
@@ -32,7 +22,6 @@ export class ApiError extends Error {
   }
 }
 
-const RETRYABLE = [404, 500, 502, 503];
 const inFlightReads = new Map<string, Promise<unknown>>();
 let requestSequence = 0;
 
@@ -52,40 +41,39 @@ async function fetchWithRetry(body: string, action: string, requestId: string): 
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body,
   };
-  const isVercel = endpoint.backend === 'vercel';
   const isWriteLike = !action.startsWith('get') && action !== 'health';
-  const maxAttempts = isVercel ? (isWriteLike ? 1 : 2) : 3;
+  const maxAttempts = isWriteLike ? 1 : 2;
   let lastStatus = 0;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const attemptStart = performance.now();
-    const controller = isVercel ? new AbortController() : null;
-    const timeoutId = controller ? window.setTimeout(() => controller.abort(), 8000) : null;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 8000);
     try {
-      const res = await fetch(endpoint.url, controller ? { ...init, signal: controller.signal } : init);
+      const res = await fetch(endpoint, { ...init, signal: controller.signal });
       const duration = Math.round(performance.now() - attemptStart);
-      if (res.ok || isVercel || RETRYABLE.indexOf(res.status) === -1) {
+      if (res.ok || res.status < 500) {
         if (DEBUG) {
-          console.log(`[API Attempt] ${action} backend=${endpoint.backend} requestId=${requestId} #${attempt + 1} status=${res.status} ${duration}ms`);
+          console.log(`[API Attempt] ${action} requestId=${requestId} #${attempt + 1} status=${res.status} ${duration}ms`);
         }
         return res;
       }
       if (DEBUG) {
-        console.warn(`[API Retry] ${action} backend=${endpoint.backend} requestId=${requestId} #${attempt + 1} status=${res.status} ${duration}ms`);
+        console.warn(`[API Retry] ${action} requestId=${requestId} #${attempt + 1} status=${res.status} ${duration}ms`);
       }
       lastStatus = res.status;
     } catch (error) {
       const duration = Math.round(performance.now() - attemptStart);
       if (DEBUG) {
         const reason = error instanceof Error ? error.message : String(error);
-        console.warn(`[API Retry] ${action} backend=${endpoint.backend} requestId=${requestId} #${attempt + 1} network_or_cors ${duration}ms ${reason}`);
+        console.warn(`[API Retry] ${action} requestId=${requestId} #${attempt + 1} network_or_cors ${duration}ms ${reason}`);
       }
       lastStatus = 0;
     } finally {
-      if (timeoutId !== null) window.clearTimeout(timeoutId);
+      window.clearTimeout(timeoutId);
     }
     if (attempt < maxAttempts - 1) {
-      const waitMs = isVercel ? 250 : 900;
-      if (DEBUG) console.log(`[API Retry] ${action} backend=${endpoint.backend} requestId=${requestId} waiting=${waitMs}ms`);
+      const waitMs = 250;
+      if (DEBUG) console.log(`[API Retry] ${action} requestId=${requestId} waiting=${waitMs}ms`);
       await new Promise((r) => setTimeout(r, waitMs));
     }
   }
@@ -93,6 +81,15 @@ async function fetchWithRetry(body: string, action: string, requestId: string): 
     throw new ApiError('NETWORK', '通信に失敗しました。一時的なエラーの可能性があります。履歴を確認してから再操作してください。');
   }
   throw new ApiError('NETWORK', `サーバー通信エラー (HTTP ${lastStatus})。操作は完了している可能性があります。履歴を確認してから再操作してください。`);
+}
+
+async function responseJson(res: Response): Promise<any> {
+  const raw = await res.text();
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new ApiError(res.status >= 500 ? 'NETWORK' : 'SERVER_ERROR', 'サーバーから不正な応答を受信しました。時間を置いて再度お試しください。');
+  }
 }
 
 export async function callApi<T = unknown>(
@@ -116,15 +113,15 @@ export async function callApi<T = unknown>(
     }
     const payload = DEBUG ? { token, action, params, debug: 1 } : { token, action, params };
     const res = await fetchWithRetry(JSON.stringify(payload), action, requestId);
-    const json = await res.json();
+    const json = await responseJson(res);
     
     const duration = Math.round(performance.now() - startTime);
     if (DEBUG) {
       console.log(`[API End] ${action} requestId=${requestId} @ ${Math.round(performance.now())}ms (${duration}ms)`);
 
-      // GAS内部の計測データ(_perf)があればコンソールに出力
+      // Backend内部の計測データ(_perf)があればコンソールに出力
       if ((json as any)?._perf) {
-        console.log(`[GAS Perf] ${action}:`, (json as any)._perf);
+        console.log(`[API Perf] ${action}:`, (json as any)._perf);
       }
     }
 

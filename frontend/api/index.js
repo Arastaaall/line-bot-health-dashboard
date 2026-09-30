@@ -70,17 +70,18 @@ function sheetRange(sheetName) {
 }
 var SheetsClient = class {
   spreadsheetId;
+  sheetPropertiesPromise = null;
   constructor() {
     this.spreadsheetId = requiredEnv("GOOGLE_SPREADSHEET_ID");
   }
-  async values(sheetName) {
+  async values(sheetName, options = {}) {
     const token = await getGoogleAccessToken();
     const query = new URLSearchParams({
       majorDimension: "ROWS",
       // Preserve GAS getValues() number/boolean types while keeping date cells
       // readable instead of exposing Sheets' serial-date numbers.
       valueRenderOption: "UNFORMATTED_VALUE",
-      dateTimeRenderOption: "FORMATTED_STRING"
+      dateTimeRenderOption: options.dateTimeRenderOption ?? "FORMATTED_STRING"
     });
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(this.spreadsheetId)}/values/${encodeURIComponent(sheetRange(sheetName))}?${query}`;
     const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
@@ -88,12 +89,12 @@ var SheetsClient = class {
     const json = await response.json();
     return json.values ?? [[]];
   }
-  async batchValues(sheetNames) {
+  async batchValues(sheetNames, options = {}) {
     const token = await getGoogleAccessToken();
     const query = new URLSearchParams({
       majorDimension: "ROWS",
       valueRenderOption: "UNFORMATTED_VALUE",
-      dateTimeRenderOption: "FORMATTED_STRING"
+      dateTimeRenderOption: options.dateTimeRenderOption ?? "FORMATTED_STRING"
     });
     sheetNames.forEach((sheetName) => query.append("ranges", sheetRange(sheetName)));
     const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(this.spreadsheetId)}/values:batchGet?${query}`;
@@ -106,41 +107,77 @@ var SheetsClient = class {
     });
     return result;
   }
+  async sheetProperties() {
+    if (this.sheetPropertiesPromise) return this.sheetPropertiesPromise;
+    this.sheetPropertiesPromise = (async () => {
+      const token = await getGoogleAccessToken();
+      const query = new URLSearchParams({ fields: "sheets(properties(sheetId,title))" });
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(this.spreadsheetId)}?${query}`;
+      const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) throw new Error("Google Sheets metadata read failed");
+      const json = await response.json();
+      const result = /* @__PURE__ */ new Map();
+      (json.sheets ?? []).forEach((sheet) => {
+        if (sheet.properties?.title && Number.isFinite(sheet.properties.sheetId)) result.set(sheet.properties.title, sheet.properties);
+      });
+      return result;
+    })();
+    try {
+      return await this.sheetPropertiesPromise;
+    } catch (error) {
+      this.sheetPropertiesPromise = null;
+      throw error;
+    }
+  }
+  async batchUpdate(requests) {
+    const token = await getGoogleAccessToken();
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(this.spreadsheetId)}:batchUpdate`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ requests })
+    });
+    if (!response.ok) throw new Error("Google Sheets write failed");
+  }
 };
-async function sheetValues(context, sheetName) {
-  const cached = context.sheetMemo.get(sheetName);
+function readCacheKey(sheetName, options) {
+  return `${sheetName}::${options.dateTimeRenderOption ?? "FORMATTED_STRING"}`;
+}
+async function sheetValues(context, sheetName, options = {}) {
+  const key = readCacheKey(sheetName, options);
+  const cached = context.sheetMemo.get(key);
   if (cached) return cached;
-  const pending = context.sheetPending.get(sheetName);
+  const pending = context.sheetPending.get(key);
   if (pending) return pending;
-  const request = context.sheets.values(sheetName);
-  context.sheetPending.set(sheetName, request);
+  const request = context.sheets.values(sheetName, options);
+  context.sheetPending.set(key, request);
   try {
     const values = await request;
-    context.sheetMemo.set(sheetName, values);
+    context.sheetMemo.set(key, values);
     return values;
   } finally {
-    context.sheetPending.delete(sheetName);
+    context.sheetPending.delete(key);
   }
 }
-async function batchSheetValues(context, sheetNames) {
+async function batchSheetValues(context, sheetNames, options = {}) {
   const names = [...new Set(sheetNames)];
-  const missing = names.filter((name) => !context.sheetMemo.has(name) && !context.sheetPending.has(name));
+  const missing = names.filter((name) => !context.sheetMemo.has(readCacheKey(name, options)) && !context.sheetPending.has(readCacheKey(name, options)));
   if (missing.length) {
-    const batch = context.sheets.batchValues(missing);
+    const batch = context.sheets.batchValues(missing, options);
     missing.forEach((name) => {
       const pending = batch.then((values) => {
         const result2 = values.get(name) ?? [[]];
-        context.sheetMemo.set(name, result2);
+        context.sheetMemo.set(readCacheKey(name, options), result2);
         return result2;
       }).finally(() => {
-        context.sheetPending.delete(name);
+        context.sheetPending.delete(readCacheKey(name, options));
       });
-      context.sheetPending.set(name, pending);
+      context.sheetPending.set(readCacheKey(name, options), pending);
     });
   }
   const result = /* @__PURE__ */ new Map();
   await Promise.all(names.map(async (name) => {
-    result.set(name, await sheetValues(context, name));
+    result.set(name, await sheetValues(context, name, options));
   }));
   return result;
 }
@@ -161,68 +198,147 @@ async function findById(context, sheetName, idColumn, idValue) {
   return rows[0] ?? null;
 }
 
-// src/server/context.ts
-function createRequestContext() {
-  return { sheets: new SheetsClient(), sheetMemo: /* @__PURE__ */ new Map(), sheetPending: /* @__PURE__ */ new Map() };
+// src/server/mutationStore.ts
+function storeConfig() {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) throw new Error("Missing server configuration: UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN");
+  return { url: url.replace(/\/$/, ""), token };
+}
+async function command(name, args) {
+  const config = storeConfig();
+  const response = await fetch(config.url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${config.token}`, "Content-Type": "application/json" },
+    body: JSON.stringify([name, ...args])
+  });
+  if (!response.ok) throw new Error(`Mutation store ${name} failed`);
+  const json = await response.json();
+  return json.result;
+}
+var UpstashMutationStore = class {
+  get(key) {
+    return command("GET", [key]);
+  }
+  async setIfAbsent(key, value, ttlSeconds) {
+    const result = await command("SET", [key, value, "NX", "EX", String(ttlSeconds)]);
+    return result === "OK";
+  }
+  async deleteIfValue(key, value) {
+    const script = 'if redis.call("get",KEYS[1]) == ARGV[1] then return redis.call("del",KEYS[1]) else return 0 end';
+    const result = await command("EVAL", [script, "1", key, value]);
+    return result === 1;
+  }
+};
+function createMutationStore() {
+  return new UpstashMutationStore();
 }
 
-// src/server/gasProxy.ts
-var MUTATION_ACTIONS = /* @__PURE__ */ new Set([
-  "createTrainingMenu",
-  "updateTrainingMenu",
-  "updateTrainingMenuOrder",
-  "deleteTrainingMenu",
-  "createTrainingLog",
-  "createTrainingLogsBatch",
-  "updateTrainingLog",
-  "deleteTrainingLog",
-  "createBodyCompositionLog",
-  "deleteBodyCompositionLog"
-]);
-function failure(code, message) {
-  return { ok: false, error: { code, message } };
+// src/server/context.ts
+function createRequestContext(mutationStore = createMutationStore()) {
+  return { sheets: new SheetsClient(), sheetMemo: /* @__PURE__ */ new Map(), sheetPending: /* @__PURE__ */ new Map(), mutationStore };
 }
-function gasUrl() {
-  const value = process.env.VITE_GAS_URL;
-  if (!value) throw new Error("GAS backend is not configured");
-  return value;
+
+// src/server/sheetsWrite.ts
+function sheetId(properties, sheetName) {
+  const property = properties.get(sheetName);
+  if (!property) throw new Error(`Sheet not found: ${sheetName}`);
+  return property.sheetId;
 }
-function redirectUrl(response, currentUrl) {
-  const location = response.headers.get("location");
-  if (!location) return null;
-  try {
-    return new URL(location, currentUrl).toString();
-  } catch {
-    return null;
-  }
+function serialDate(value) {
+  return value.getTime() / 864e5 + 25569;
 }
-function isMutationAction(action) {
-  return MUTATION_ACTIONS.has(action);
+function extendedValue(value) {
+  if (value instanceof Date) return { numberValue: serialDate(value) };
+  if (typeof value === "boolean") return { boolValue: value };
+  if (typeof value === "number" && Number.isFinite(value)) return { numberValue: value };
+  return { stringValue: value === null || value === void 0 ? "" : String(value) };
 }
-async function proxyMutation(request) {
-  const body = JSON.stringify(request);
-  let url = gasUrl();
-  let response;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    response = await fetch(url, {
-      method: "POST",
-      redirect: "manual",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body
+function headerOf(values, sheetName) {
+  if (!values.length) throw new Error(`Sheet has no header: ${sheetName}`);
+  return values[0].map((value) => String(value ?? ""));
+}
+async function sheetHeader(context, sheetName) {
+  return headerOf(await sheetValues(context, sheetName), sheetName);
+}
+async function findRowPosition(context, sheetName, idColumn, idValue) {
+  const values = await sheetValues(context, sheetName);
+  const header = headerOf(values, sheetName);
+  const idIndex = header.indexOf(idColumn);
+  if (idIndex < 0) return null;
+  for (let index = 1; index < values.length; index += 1) {
+    if (String(values[index][idIndex] ?? "") !== String(idValue ?? "")) continue;
+    const row = {};
+    header.forEach((column, columnIndex) => {
+      row[column] = values[index][columnIndex] ?? "";
     });
-    if (![301, 302, 303, 307, 308].includes(response.status)) break;
-    const next = redirectUrl(response, url);
-    if (!next) return { status: 502, body: failure("GAS_PROXY_ERROR", "GAS\u5FDC\u7B54\u306E\u8EE2\u9001\u5148\u3092\u89E3\u6C7A\u3067\u304D\u307E\u305B\u3093") };
-    url = next;
+    return { row, rowNumber: index + 1, header };
   }
-  const raw = await response.text();
-  try {
-    const json = JSON.parse(raw);
-    return { status: response.status >= 200 && response.status < 600 ? response.status : 502, body: json };
-  } catch {
-    return { status: 502, body: failure("GAS_PROXY_ERROR", "GAS\u304B\u3089\u4E0D\u6B63\u306A\u5FDC\u7B54\u3092\u53D7\u4FE1\u3057\u307E\u3057\u305F") };
-  }
+  return null;
 }
+async function rowsByForeignKey(context, sheetName, foreignKey, value) {
+  const values = await sheetValues(context, sheetName);
+  const header = headerOf(values, sheetName);
+  const keyIndex = header.indexOf(foreignKey);
+  if (keyIndex < 0) return [];
+  const result = [];
+  for (let index = 1; index < values.length; index += 1) {
+    if (String(values[index][keyIndex] ?? "") !== String(value ?? "")) continue;
+    const row = {};
+    header.forEach((column, columnIndex) => {
+      row[column] = values[index][columnIndex] ?? "";
+    });
+    result.push({ row, rowNumber: index + 1, header });
+  }
+  return result;
+}
+function appendRowsRequest(properties, sheetName, header, rows) {
+  return {
+    appendCells: {
+      sheetId: sheetId(properties, sheetName),
+      fields: "userEnteredValue",
+      rows: rows.map((row) => ({
+        values: header.map((column) => ({ userEnteredValue: extendedValue(row[column]) }))
+      }))
+    }
+  };
+}
+function updateCellsRequest(properties, sheetName, rowNumber, header, patch) {
+  const id = sheetId(properties, sheetName);
+  return Object.entries(patch).flatMap(([column, value]) => {
+    const columnIndex = header.indexOf(column);
+    if (columnIndex < 0) return [];
+    return [{
+      updateCells: {
+        start: { sheetId: id, rowIndex: rowNumber - 1, columnIndex },
+        fields: "userEnteredValue",
+        rows: [{ values: [{ userEnteredValue: extendedValue(value) }] }]
+      }
+    }];
+  });
+}
+function deleteRowsRequest(properties, sheetName, rowNumbers) {
+  const id = sheetId(properties, sheetName);
+  return [...rowNumbers].sort((a, b) => b - a).map((rowNumber) => ({
+    deleteDimension: {
+      range: { sheetId: id, dimension: "ROWS", startIndex: rowNumber - 1, endIndex: rowNumber }
+    }
+  }));
+}
+async function writeBatch(context, requests, touchedSheets) {
+  if (!requests.length) return;
+  await context.sheets.batchUpdate(requests);
+  const prefixes = [...new Set(touchedSheets)].map((name) => `${name}::`);
+  [...context.sheetMemo.keys()].forEach((key) => {
+    if (prefixes.some((prefix) => key.startsWith(prefix))) context.sheetMemo.delete(key);
+  });
+}
+async function metadata(context) {
+  return context.sheets.sheetProperties();
+}
+
+// src/server/mutationCommon.ts
+import { randomUUID } from "node:crypto";
 
 // src/server/date.ts
 var JST = "Asia/Tokyo";
@@ -272,6 +388,10 @@ function dateKeyOf(value) {
 function todayKey() {
   return dateKeyOf(/* @__PURE__ */ new Date());
 }
+function nowIso() {
+  const p = parts(/* @__PURE__ */ new Date());
+  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}:${p.second}`;
+}
 function formatFoodTimestamp(value) {
   const date = asDate(value);
   if (Number.isNaN(date.getTime())) return "";
@@ -282,6 +402,751 @@ function addDays(date, amount) {
   const copy = new Date(date.getTime());
   copy.setDate(copy.getDate() + amount);
   return copy;
+}
+
+// src/server/mutationCommon.ts
+var FORMULA_VERSION = "v1";
+var CALORIE_MIN = 1;
+var CALORIE_MAX = 3e3;
+var STRENGTH_WORK_SEC_PER_SET = 30;
+var STRENGTH_REST_SEC_DEFAULT = 120;
+var ASSUMED_SPEED_KMH = { running: 8, walking: 4.5, cycling: 20, swimming: 2 };
+var MET_CATEGORY_VALUES = {
+  general_weight: 3.5,
+  heavy_compound: 5,
+  high_intensity: 6,
+  circuit: 5.8,
+  bodyweight_general: 3,
+  bodyweight_vigorous: 6.5
+};
+var RPE_LABEL_MAP = {
+  \u697D\u3060\u3063\u305F: 2,
+  \u4F59\u88D5\u3042\u308A: 5,
+  \u307E\u3042\u307E\u3042: 6,
+  \u307E\u3042\u307E\u3042\u304D\u3064\u3044: 7,
+  \u304B\u306A\u308A\u304D\u3064\u3044: 8,
+  \u9650\u754C: 9,
+  \u5730\u7344: 10
+};
+var BODYCOMP_RANGES = {
+  weight_kg: [20, 300],
+  body_fat_pct: [3, 60],
+  skeletal_muscle_kg: [5, 80],
+  muscle_mass_kg: [10, 120],
+  body_water_pct: [30, 75],
+  visceral_fat: [1, 30],
+  bmr: [500, 3e3],
+  waist_cm: [40, 200]
+};
+function ok(data) {
+  return { ok: true, data };
+}
+function fail(code, message) {
+  return { ok: false, error: { code, message } };
+}
+function notFound(message) {
+  return fail("NOT_FOUND", message);
+}
+function text(row, key, fallback = "") {
+  const value = row[key];
+  return value === null || value === void 0 ? fallback : String(value);
+}
+function numberValue(value, fallback = null) {
+  if (value === "" || value === null || value === void 0) return fallback;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+function bool(value) {
+  return value === true || value === 1 || value === "1" || String(value).toLowerCase() === "true";
+}
+function cellNumber(value) {
+  const number = numberValue(value);
+  return number === null ? "" : number;
+}
+async function userRecord(context, userId) {
+  const rows = await getRows(context, "users", (row2) => text(row2, "user_id") === userId);
+  const row = rows[0];
+  return {
+    userId,
+    name: row ? text(row, "User_Name") || text(row, "user_name") || "\u30E6\u30FC\u30B6\u30FC" : "\u30E6\u30FC\u30B6\u30FC",
+    weight: numberValue(row?.weight),
+    height: numberValue(row?.height),
+    targetCalories: numberValue(row?.target_calories),
+    isPremium: bool(row?.is_premium)
+  };
+}
+async function activeTrainingMasters(context) {
+  return getRows(context, "Training_Master", (row) => bool(row.is_active));
+}
+async function masterDefaults(context, masterId) {
+  const id = String(masterId ?? "");
+  if (!id) return null;
+  const active = await activeTrainingMasters(context);
+  const row = active.find((candidate) => text(candidate, "master_id") === id) ?? await findById(context, "Training_Master", "master_id", id);
+  if (!row) return null;
+  return {
+    master_id: row.master_id,
+    exercise_name: text(row, "exercise_name"),
+    exercise_type: text(row, "exercise_type", "other"),
+    body_part: text(row, "body_part", "other"),
+    met_category: text(row, "met_category"),
+    default_met_value: numberValue(row.default_met_value),
+    is_bodyweight: bool(row.is_bodyweight)
+  };
+}
+function deriveInputProfile(master) {
+  if (master.exercise_type === "cardio") return "cardio_basic";
+  return master.is_bodyweight ? "strength_basic" : "strength_advanced";
+}
+function resolveRpe(params) {
+  const number = numberValue(params.rpe);
+  if (number !== null && number >= 1 && number <= 10) return { rpe: number, rpe_source: "user" };
+  const label = String(params.rpe_label ?? "");
+  if (label && Object.prototype.hasOwnProperty.call(RPE_LABEL_MAP, label)) return { rpe: RPE_LABEL_MAP[label], rpe_source: "converted" };
+  return { rpe: null, rpe_source: "estimated" };
+}
+function validateTrainingLogBase(params) {
+  const errors = [];
+  const types = ["strength", "cardio", "circuit", "other"];
+  if (!params.training_type || !types.includes(String(params.training_type))) errors.push("training_type\u304C\u4E0D\u6B63\u3067\u3059");
+  if (!params.training_date || Number.isNaN(asDate(params.training_date).getTime())) errors.push("training_date\u304C\u4E0D\u6B63\u3067\u3059");
+  const duration = numberValue(params.duration_min);
+  if (duration !== null && (duration < 1 || duration > 600)) errors.push("duration_min\u306F1\u301C600\u3067\u3059");
+  const distance = numberValue(params.distance_km);
+  if (distance !== null && (distance <= 0 || distance > 200)) errors.push("distance_km\u306F0\u301C200\u3067\u3059");
+  const sets = Array.isArray(params.sets) ? params.sets : [];
+  if (duration === null && distance === null && sets.length === 0) errors.push("\u6642\u9593\u30FB\u8DDD\u96E2\u30FB\u30BB\u30C3\u30C8\u60C5\u5831\u306E\u3044\u305A\u308C\u304B\u304C\u5FC5\u9808\u3067\u3059");
+  return errors;
+}
+function validateSets(sets) {
+  const errors = [];
+  (Array.isArray(sets) ? sets : []).forEach((raw, index) => {
+    const set = raw && typeof raw === "object" ? raw : {};
+    const reps = numberValue(set.reps);
+    if (reps === null || reps < 1 || reps > 200) errors.push(`sets[${index}].reps\u306F1\u301C200\u3067\u3059`);
+    const weight = numberValue(set.weight_kg);
+    if (weight !== null && (weight < 0 || weight > 500)) errors.push(`sets[${index}].weight_kg\u306F0\u301C500\u3067\u3059`);
+    const rpe = numberValue(set.rpe);
+    if (rpe !== null && (rpe < 1 || rpe > 10)) errors.push(`sets[${index}].rpe\u306F1\u301C10\u3067\u3059`);
+  });
+  return errors;
+}
+function detectCardioKind(name) {
+  const value = String(name ?? "");
+  if (value.includes("\u30E9\u30F3\u30CB\u30F3\u30B0") || value.includes("\u30B8\u30E7\u30AE\u30F3\u30B0") || value.includes("\u30C8\u30EC\u30C3\u30C9\u30DF\u30EB")) return "running";
+  if (value.includes("\u30A6\u30A9\u30FC\u30AD\u30F3\u30B0") || value.includes("\u6563\u6B69")) return "walking";
+  if (value.includes("\u30B5\u30A4\u30AF\u30EA\u30F3\u30B0") || value.includes("\u81EA\u8EE2\u8ECA") || value.includes("\u30D0\u30A4\u30AF")) return "cycling";
+  if (value.includes("\u6C34\u6CF3") || value.includes("\u30B9\u30A4\u30E0")) return "swimming";
+  return null;
+}
+function adjustMetBySpeed(kind, speedKmh, fallbackMet) {
+  if (kind === "running") {
+    if (speedKmh < 6.4) return 6;
+    if (speedKmh <= 8) return 8.3;
+    if (speedKmh <= 9.7) return 9.8;
+    if (speedKmh <= 11.3) return 11;
+    if (speedKmh <= 12.9) return 11.8;
+    return 12.8;
+  }
+  if (kind === "walking") {
+    if (speedKmh < 4) return 2.8;
+    if (speedKmh <= 5.6) return 3.5;
+    if (speedKmh <= 6.4) return 4.3;
+    return 5;
+  }
+  if (kind === "cycling") {
+    if (speedKmh < 16) return 4;
+    if (speedKmh <= 19) return 6;
+    if (speedKmh <= 22) return 6.8;
+    if (speedKmh <= 26) return 8;
+    return 10;
+  }
+  return fallbackMet;
+}
+function clampCalories(raw) {
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.max(CALORIE_MIN, Math.min(CALORIE_MAX, Math.round(raw)));
+}
+function beginnerMetFromRpe(rpe) {
+  const number = numberValue(rpe);
+  if (number === null || number <= 5) return 3.5;
+  if (number <= 7) return 4.5;
+  if (number <= 8) return 5;
+  return 5.5;
+}
+function calculateCardioCalories(params) {
+  const kind = detectCardioKind(params.exerciseName);
+  let met = params.defaultMet || 3.5;
+  let method = "MET";
+  let hours = 0;
+  if (params.durationMin) {
+    hours = params.durationMin / 60;
+    if (params.distanceKm && kind) met = adjustMetBySpeed(kind, params.distanceKm / hours, met);
+  } else if (params.distanceKm && kind) {
+    hours = params.distanceKm / ASSUMED_SPEED_KMH[kind];
+    method = "MET_standard_speed";
+  } else {
+    return { calories: 0, met, hours: 0, method };
+  }
+  return { calories: clampCalories(1.05 * met * params.bodyWeight * hours), met, hours, method };
+}
+function calculateStrengthCalories(params) {
+  let met;
+  let hours;
+  if (params.sets.length > 0) {
+    met = MET_CATEGORY_VALUES[params.metCategory] || MET_CATEGORY_VALUES.general_weight;
+    if (params.durationMin) hours = params.durationMin / 60;
+    else hours = (STRENGTH_WORK_SEC_PER_SET * params.sets.length + STRENGTH_REST_SEC_DEFAULT * (params.sets.length - 1)) / 3600;
+  } else {
+    met = beginnerMetFromRpe(params.rpe);
+    hours = (params.durationMin || 0) / 60;
+  }
+  return { calories: clampCalories(1.05 * met * params.bodyWeight * hours), met, hours, method: "strength_estimation" };
+}
+function normalizeMeasuredAt(raw) {
+  if (raw === null || raw === void 0 || raw === "") return null;
+  const source = String(raw).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(source)) {
+    const currentTime = nowIso().slice(11);
+    return asDate(`${source}T${currentTime}`);
+  }
+  const date = asDate(source);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+function validateBodyComposition(params) {
+  const errors = [];
+  const weight = numberValue(params.weight_kg);
+  if (weight === null) errors.push("weight_kg\u306F\u5FC5\u9808\u3067\u3059");
+  else if (weight < 20 || weight > 300) errors.push("weight_kg\u306F20\u301C300\u306E\u7BC4\u56F2\u3067\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044");
+  if (!params.measured_at) errors.push("measured_at\u306F\u5FC5\u9808\u3067\u3059");
+  else {
+    const source = String(params.measured_at);
+    const date = asDate(source.includes("T") ? source : `${source}T00:00:00`);
+    if (Number.isNaN(date.getTime())) errors.push("measured_at\u306E\u5F62\u5F0F\u304C\u4E0D\u6B63\u3067\u3059");
+    else if (source.includes("T") ? date.getTime() > Date.now() : dateKeyOf(date) > todayKey()) errors.push("measured_at\u306B\u672A\u6765\u65E5\u306F\u6307\u5B9A\u3067\u304D\u307E\u305B\u3093");
+  }
+  const devices = ["inbody", "home_scale", "manual", "other"];
+  if (!params.measurement_device || !devices.includes(String(params.measurement_device))) errors.push("measurement_device\u304C\u4E0D\u6B63\u3067\u3059");
+  Object.entries(BODYCOMP_RANGES).forEach(([key, range]) => {
+    if (key === "weight_kg" || params[key] === void 0 || params[key] === null || params[key] === "") return;
+    const value = numberValue(params[key]);
+    if (value === null || value < range[0] || value > range[1]) errors.push(`${key}\u306F${range[0]}\u301C${range[1]}\u306E\u7BC4\u56F2\u3067\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044`);
+  });
+  return errors;
+}
+var LOCK_KEY = "lock:dashboard-spreadsheet";
+var LOCK_TTL_SECONDS = 20;
+var LOCK_WAIT_MS = 3e3;
+async function withMutationLock(context, fn) {
+  const owner = randomUUID();
+  const startedAt = Date.now();
+  let locked = false;
+  try {
+    while (Date.now() - startedAt <= LOCK_WAIT_MS) {
+      if (await context.mutationStore.setIfAbsent(LOCK_KEY, owner, LOCK_TTL_SECONDS)) {
+        locked = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  } catch {
+    return fail("SERVER_ERROR", "\u4E00\u6642\u7684\u306B\u51E6\u7406\u3092\u958B\u59CB\u3067\u304D\u307E\u305B\u3093\u3002\u3057\u3070\u3089\u304F\u3057\u3066\u518D\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044");
+  }
+  if (!locked) return fail("SERVER_ERROR", "\u6DF7\u307F\u5408\u3063\u3066\u3044\u307E\u3059\u3002\u3057\u3070\u3089\u304F\u3057\u3066\u518D\u5EA6\u304A\u8A66\u3057\u304F\u3060\u3055\u3044");
+  try {
+    return await fn();
+  } finally {
+    try {
+      await context.mutationStore.deleteIfValue(LOCK_KEY, owner);
+    } catch {
+    }
+  }
+}
+function idempotencyKey(userId, action, clientId) {
+  const id = String(clientId ?? "").trim();
+  return id ? `idempotency:${userId}:${action}:${id}` : null;
+}
+async function dedupGet(context, userId, action, clientId) {
+  const key = idempotencyKey(userId, action, clientId);
+  if (!key) return null;
+  const value = await context.mutationStore.get(key);
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+async function dedupSave(context, userId, action, clientId, result) {
+  const key = idempotencyKey(userId, action, clientId);
+  if (!key) return;
+  await context.mutationStore.setIfAbsent(key, JSON.stringify(result), 600);
+}
+
+// src/server/bodyMutation.ts
+function rowsFromValues(values) {
+  if (values.length < 2) return [];
+  const header = values[0].map((value) => String(value ?? ""));
+  return values.slice(1).map((valuesRow) => Object.fromEntries(header.map((column, index) => [column, valuesRow[index] ?? ""])));
+}
+function latestWeight(rows, userId, excludedId = "") {
+  const candidates = rows.filter((row) => text(row, "user_id") === userId && text(row, "body_log_id") !== excludedId && numberValue(row.weight_kg) !== null);
+  candidates.sort((left, right) => {
+    const measured = asDate(right.measured_at).getTime() - asDate(left.measured_at).getTime();
+    return measured || asDate(right.created_at).getTime() - asDate(left.created_at).getTime();
+  });
+  return candidates.length ? numberValue(candidates[0].weight_kg) : null;
+}
+async function serialBodyRows(context) {
+  return rowsFromValues(await sheetValues(context, "Body_Composition", { dateTimeRenderOption: "SERIAL_NUMBER" }));
+}
+async function userWeightPatch(context, userId, weight) {
+  if (weight === null) return [];
+  const user = await findRowPosition(context, "users", "user_id", userId);
+  if (!user) return [];
+  const properties = await metadata(context);
+  return updateCellsRequest(properties, "users", user.rowNumber, user.header, { weight });
+}
+function bodyRow(userId, params, id, measuredAt, now) {
+  return {
+    body_log_id: id,
+    user_id: userId,
+    measured_at: measuredAt,
+    measurement_device: params.measurement_device,
+    weight_kg: numberValue(params.weight_kg),
+    body_fat_pct: cellNumber(params.body_fat_pct),
+    skeletal_muscle_kg: cellNumber(params.skeletal_muscle_kg),
+    muscle_mass_kg: cellNumber(params.muscle_mass_kg),
+    body_water_pct: cellNumber(params.body_water_pct),
+    visceral_fat: cellNumber(params.visceral_fat),
+    bmr: cellNumber(params.bmr),
+    waist_cm: cellNumber(params.waist_cm),
+    other_data: params.other_data || "",
+    memo: params.memo || "",
+    created_at: now
+  };
+}
+async function createBodyCompositionLog(context, userId, params) {
+  return withMutationLock(context, async () => {
+    const measuredAt = normalizeMeasuredAt(params.measured_at);
+    const errors = validateBodyComposition(params);
+    if (!measuredAt) errors.push("measured_at\u306E\u5F62\u5F0F\u304C\u4E0D\u6B63\u3067\u3059");
+    if (errors.length) return fail("VALIDATION_ERROR", errors.join(" / "));
+    if (!measuredAt) return fail("VALIDATION_ERROR", "measured_at\u306E\u5F62\u5F0F\u304C\u4E0D\u6B63\u3067\u3059");
+    const duplicate = await dedupGet(context, userId, "createBodyCompositionLog", params.client_id);
+    if (duplicate) return duplicate;
+    const id = `bc_${crypto.randomUUID()}`;
+    const now = nowIso();
+    const row = bodyRow(userId, params, id, measuredAt, now);
+    const rows = await serialBodyRows(context);
+    rows.push(row);
+    const weight = latestWeight(rows, userId);
+    const [properties, header] = await Promise.all([metadata(context), context.sheets.values("Body_Composition").then((values) => values[0].map((value) => String(value ?? "")))]);
+    const requests = [appendRowsRequest(properties, "Body_Composition", header, [row])];
+    requests.push(...await userWeightPatch(context, userId, weight));
+    await writeBatch(context, requests, ["Body_Composition", "users"]);
+    const result = ok({ body_log_id: id });
+    await dedupSave(context, userId, "createBodyCompositionLog", params.client_id, result);
+    return result;
+  });
+}
+async function deleteBodyCompositionLog(context, userId, params) {
+  return withMutationLock(context, async () => {
+    const found = await findRowPosition(context, "Body_Composition", "body_log_id", params.body_log_id);
+    if (!found || text(found.row, "user_id") !== userId) return notFound("\u8A18\u9332\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
+    const rows = await serialBodyRows(context);
+    const weight = latestWeight(rows, userId, String(params.body_log_id));
+    const properties = await metadata(context);
+    const requests = deleteRowsRequest(properties, "Body_Composition", [found.rowNumber]);
+    requests.push(...await userWeightPatch(context, userId, weight));
+    await writeBatch(context, requests, ["Body_Composition", "users"]);
+    return ok({ deleted: true });
+  });
+}
+function dispatchBodyMutation(context, userId, action, params) {
+  switch (action) {
+    case "createBodyCompositionLog":
+      return createBodyCompositionLog(context, userId, params);
+    case "deleteBodyCompositionLog":
+      return deleteBodyCompositionLog(context, userId, params);
+    default:
+      return Promise.resolve(fail("NOT_FOUND", `Unknown mutation action: ${action}`));
+  }
+}
+
+// src/server/trainingMutation.ts
+function record(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+function setRows(logId, sets, now) {
+  return sets.map((raw, index) => {
+    const set = record(raw);
+    const isBodyweight = set.is_bodyweight === true || set.is_bodyweight === 1 || set.is_bodyweight === "1" || String(set.is_bodyweight).toLowerCase() === "true";
+    const rawWeight = numberValue(set.weight_kg);
+    return {
+      set_id: `ts_${crypto.randomUUID()}`,
+      training_log_id: logId,
+      set_no: index + 1,
+      weight_kg: isBodyweight && rawWeight === null ? 0 : cellNumber(set.weight_kg),
+      reps: numberValue(set.reps, 0) ?? 0,
+      rpe: cellNumber(set.rpe),
+      is_bodyweight: isBodyweight,
+      duration_sec: cellNumber(set.duration_sec),
+      rest_sec: cellNumber(set.rest_sec),
+      memo: set.memo || "",
+      created_at: now
+    };
+  });
+}
+async function appendAtomic(context, log, sets) {
+  const [properties, logHeader, setHeader] = await Promise.all([
+    metadata(context),
+    sheetHeader(context, "Training_Logs"),
+    sheetHeader(context, "Training_Sets")
+  ]);
+  await writeBatch(context, [
+    appendRowsRequest(properties, "Training_Logs", logHeader, [log]),
+    ...sets.length ? [appendRowsRequest(properties, "Training_Sets", setHeader, sets)] : []
+  ], ["Training_Logs", "Training_Sets"]);
+}
+async function resolveMenuAndMaster(context, userId, params) {
+  let masterId = String(params.master_id ?? "");
+  let exerciseName = String(params.exercise_name ?? "").trim();
+  if (params.menu_id) {
+    const menu = await findById(context, "Training_Menus", "menu_id", params.menu_id);
+    if (!menu || text(menu, "user_id") !== userId) return notFound("menu_id\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
+    if (!exerciseName) exerciseName = text(menu, "menu_name");
+    if (!masterId) masterId = text(menu, "master_id");
+  }
+  let metCategory = "";
+  let defaultMet = null;
+  if (masterId) {
+    const master = await masterDefaults(context, masterId);
+    if (master) {
+      if (!exerciseName) exerciseName = master.exercise_name;
+      metCategory = master.met_category;
+      defaultMet = master.default_met_value;
+    }
+  }
+  return { menu: null, masterId, exerciseName, metCategory, defaultMet };
+}
+function calculation(params, exerciseName, metCategory, defaultMet, bodyWeight, rpe) {
+  const sets = Array.isArray(params.sets) ? params.sets : [];
+  if (params.training_type === "cardio") {
+    return calculateCardioCalories({
+      exerciseName,
+      durationMin: numberValue(params.duration_min),
+      distanceKm: numberValue(params.distance_km),
+      defaultMet: defaultMet || 3.5,
+      bodyWeight
+    });
+  }
+  return calculateStrengthCalories({
+    sets,
+    bodyWeight,
+    metCategory,
+    durationMin: numberValue(params.duration_min),
+    rpe
+  });
+}
+function logRow(userId, params, logId, masterId, exerciseName, bodyWeight, rpeResolved, calc, now) {
+  return {
+    training_log_id: logId,
+    user_id: userId,
+    menu_id: params.menu_id || "",
+    master_id: masterId,
+    exercise_name_snapshot: exerciseName,
+    training_type: params.training_type,
+    training_date: params.training_date,
+    duration_min: cellNumber(params.duration_min),
+    distance_km: cellNumber(params.distance_km),
+    incline_pct: cellNumber(params.incline_pct),
+    rpe: rpeResolved.rpe === null ? "" : rpeResolved.rpe,
+    rpe_source: rpeResolved.rpe_source,
+    estimated_calories: calc.calories,
+    calorie_estimation_method: calc.method,
+    calorie_formula_version: FORMULA_VERSION,
+    body_weight: bodyWeight,
+    memo: params.memo || "",
+    created_at: now,
+    updated_at: now
+  };
+}
+async function createTrainingLogLocked(context, userId, params, action) {
+  const duplicate = await dedupGet(context, userId, action, params.client_id);
+  if (duplicate) return duplicate;
+  const user = await userRecord(context, userId);
+  const dateKey = params.training_date ? dateKeyOf(params.training_date) : todayKey();
+  if (!user.isPremium) {
+    const count = (await getRows(context, "Training_Logs", (row) => text(row, "user_id") === userId && dateKeyOf(row.training_date) === dateKey)).length;
+    if (count >= 7) return fail("LIMIT_EXCEEDED", "\u7121\u6599\u30D7\u30E9\u30F3\u306F1\u65E57\u4EF6\u307E\u3067\u3067\u3059");
+  }
+  const errors = validateTrainingLogBase(params).concat(validateSets(params.sets));
+  if (errors.length) return fail("VALIDATION_ERROR", errors.join(" / "));
+  const resolved = await resolveMenuAndMaster(context, userId, params);
+  if ("error" in resolved) return resolved;
+  if (!resolved.exerciseName) return fail("VALIDATION_ERROR", "exercise_name\u306F\u5FC5\u9808\u3067\u3059");
+  const rpeResolved = resolveRpe(params);
+  const bodyWeight = user.weight ?? 60;
+  const calc = calculation(params, resolved.exerciseName, resolved.metCategory, resolved.defaultMet, bodyWeight, rpeResolved.rpe);
+  const now = nowIso();
+  const logId = `tl_${crypto.randomUUID()}`;
+  const rows = setRows(logId, Array.isArray(params.sets) ? params.sets : [], now);
+  await appendAtomic(context, logRow(userId, params, logId, resolved.masterId, resolved.exerciseName, bodyWeight, rpeResolved, calc, now), rows);
+  const result = ok({ training_log_id: logId, estimated_calories: calc.calories, calorie_estimation_method: calc.method, calorie_formula_version: FORMULA_VERSION, body_weight: bodyWeight });
+  await dedupSave(context, userId, action, params.client_id, result);
+  return result;
+}
+async function createTrainingMenu(context, userId, params) {
+  return withMutationLock(context, async () => {
+    const duplicate = await dedupGet(context, userId, "createTrainingMenu", params.client_id);
+    if (duplicate) return duplicate;
+    const user = await userRecord(context, userId);
+    if (!user.isPremium) {
+      const count = (await getRows(context, "Training_Menus", (row) => text(row, "user_id") === userId && boolActive(row.is_active))).length;
+      if (count >= 5) return fail("LIMIT_EXCEEDED", "\u7121\u6599\u30D7\u30E9\u30F3\u306E\u30DE\u30A4\u30E1\u30CB\u30E5\u30FC\u306F5\u4EF6\u307E\u3067\u3067\u3059");
+    }
+    const name = String(params.menu_name ?? "").trim();
+    if (!name) return fail("VALIDATION_ERROR", "menu_name\u306F\u5FC5\u9808\u3067\u3059");
+    let trainingType = String(params.training_type ?? "other");
+    let inputProfile = String(params.input_profile ?? "");
+    let bodyPart = String(params.body_part ?? "other");
+    const masterId = String(params.master_id ?? "");
+    if (masterId) {
+      const master = await masterDefaults(context, masterId);
+      if (!master) return notFound("master_id\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
+      trainingType = master.exercise_type;
+      inputProfile = deriveInputProfile(master);
+      bodyPart = String(params.body_part || master.body_part);
+    }
+    if (!inputProfile) inputProfile = "strength_basic";
+    const existing = await getRows(context, "Training_Menus", (row) => text(row, "user_id") === userId);
+    const maxOrder = existing.reduce((max, row) => Math.max(max, numberValue(row.display_order, 0) ?? 0), 0);
+    const now = nowIso();
+    const menuId = `tmu_${crypto.randomUUID()}`;
+    const menu = {
+      menu_id: menuId,
+      user_id: userId,
+      master_id: masterId,
+      training_group: String(params.training_group || "\u305D\u306E\u4ED6"),
+      body_part: bodyPart,
+      menu_name: name,
+      training_type: trainingType,
+      input_profile: inputProfile,
+      display_order: maxOrder + 1,
+      is_active: true,
+      created_at: now,
+      updated_at: now
+    };
+    const [properties, header] = await Promise.all([metadata(context), sheetHeader(context, "Training_Menus")]);
+    await writeBatch(context, [appendRowsRequest(properties, "Training_Menus", header, [menu])], ["Training_Menus"]);
+    const result = ok({ menu_id: menuId });
+    await dedupSave(context, userId, "createTrainingMenu", params.client_id, result);
+    return result;
+  });
+}
+function boolActive(value) {
+  return value === true || value === 1 || value === "1" || String(value).toLowerCase() === "true";
+}
+async function updateTrainingMenu(context, userId, params) {
+  return withMutationLock(context, async () => {
+    const found = await findRowPosition(context, "Training_Menus", "menu_id", params.menu_id);
+    if (!found || text(found.row, "user_id") !== userId) return notFound("\u30E1\u30CB\u30E5\u30FC\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
+    const patch = { updated_at: nowIso() };
+    if (params.display_order !== void 0 && params.display_order !== null) patch.display_order = numberValue(params.display_order, 0) ?? 0;
+    if (params.menu_name) patch.menu_name = String(params.menu_name).trim();
+    if (params.training_group !== void 0) patch.training_group = String(params.training_group || "\u305D\u306E\u4ED6");
+    const properties = await metadata(context);
+    await writeBatch(context, updateCellsRequest(properties, "Training_Menus", found.rowNumber, found.header, patch), ["Training_Menus"]);
+    return ok({ menu_id: params.menu_id });
+  });
+}
+async function updateTrainingMenuOrder(context, userId, params) {
+  return withMutationLock(context, async () => {
+    const orders = Array.isArray(params.orders) ? params.orders.map(record) : [];
+    if (!orders.length) return ok({});
+    const ids = orders.map((order) => String(order.menu_id));
+    const mine = await getRows(context, "Training_Menus", (row) => text(row, "user_id") === userId && ids.includes(text(row, "menu_id")));
+    if (mine.length !== ids.length) return notFound("\u30E1\u30CB\u30E5\u30FC\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
+    const properties = await metadata(context);
+    const requests = [];
+    for (const order of orders) {
+      const found = await findRowPosition(context, "Training_Menus", "menu_id", order.menu_id);
+      if (!found || text(found.row, "user_id") !== userId) return notFound("\u30E1\u30CB\u30E5\u30FC\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
+      requests.push(...updateCellsRequest(properties, "Training_Menus", found.rowNumber, found.header, {
+        display_order: numberValue(order.display_order, 0) ?? 0,
+        training_group: String(order.training_group || "\u305D\u306E\u4ED6"),
+        updated_at: nowIso()
+      }));
+    }
+    await writeBatch(context, requests, ["Training_Menus"]);
+    return ok({});
+  });
+}
+async function deleteTrainingMenu(context, userId, params) {
+  return withMutationLock(context, async () => {
+    const found = await findRowPosition(context, "Training_Menus", "menu_id", params.menu_id);
+    if (!found || text(found.row, "user_id") !== userId) return notFound("\u30E1\u30CB\u30E5\u30FC\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
+    const properties = await metadata(context);
+    await writeBatch(context, updateCellsRequest(properties, "Training_Menus", found.rowNumber, found.header, { is_active: false, updated_at: nowIso() }), ["Training_Menus"]);
+    return ok({ menu_id: params.menu_id });
+  });
+}
+async function createTrainingLog(context, userId, params) {
+  return withMutationLock(context, () => createTrainingLogLocked(context, userId, params, "createTrainingLog"));
+}
+async function createTrainingLogsBatch(context, userId, params) {
+  return withMutationLock(context, async () => {
+    const duplicate = await dedupGet(context, userId, "createTrainingLogsBatch", params.client_id);
+    if (duplicate) return duplicate;
+    const user = await userRecord(context, userId);
+    const logs = Array.isArray(params.logs) ? params.logs.map(record) : [];
+    if (!logs.length) return fail("VALIDATION_ERROR", "\u30ED\u30B0\u304C\u6307\u5B9A\u3055\u308C\u3066\u3044\u307E\u305B\u3093");
+    if (!user.isPremium) {
+      const todayCount = (await getRows(context, "Training_Logs", (row) => text(row, "user_id") === userId && dateKeyOf(row.training_date) === todayKey())).length;
+      if (todayCount + logs.length > 7) return fail("LIMIT_EXCEEDED", `\u7121\u6599\u30D7\u30E9\u30F3\u306F1\u65E57\u4EF6\u307E\u3067\u3067\u3059\uFF08\u672C\u65E5${todayCount}\u4EF6\u767B\u9332\u6E08\u307F\uFF09`);
+    }
+    const results = [];
+    for (const [index, log] of logs.entries()) {
+      const errors = validateTrainingLogBase(log).concat(validateSets(log.sets));
+      if (errors.length) {
+        results.push({ index, ok: false, error: errors.join(" / ") });
+        continue;
+      }
+      const resolved = await resolveMenuAndMaster(context, userId, log);
+      if ("error" in resolved) {
+        results.push({ index, ok: false, error: resolved.error.message });
+        continue;
+      }
+      if (!resolved.exerciseName) {
+        results.push({ index, ok: false, error: "exercise_name\u306F\u5FC5\u9808\u3067\u3059" });
+        continue;
+      }
+      const rpeResolved = resolveRpe(log);
+      const bodyWeight = user.weight ?? 60;
+      const calc = calculation(log, resolved.exerciseName, resolved.metCategory, resolved.defaultMet, bodyWeight, rpeResolved.rpe);
+      const now = nowIso();
+      const logId = `tl_${crypto.randomUUID()}`;
+      const resultData = { training_log_id: logId, estimated_calories: calc.calories, calorie_estimation_method: calc.method, calorie_formula_version: FORMULA_VERSION, body_weight: bodyWeight };
+      try {
+        await appendAtomic(context, logRow(userId, log, logId, resolved.masterId, resolved.exerciseName, bodyWeight, rpeResolved, calc, now), setRows(logId, Array.isArray(log.sets) ? log.sets : [], now));
+        results.push({ index, ok: true, data: resultData });
+      } catch {
+        results.push({ index, ok: false, error: "\u30ED\u30B0\u306E\u4FDD\u5B58\u306B\u5931\u6557\u3057\u307E\u3057\u305F" });
+      }
+    }
+    const allOk = results.every((result2) => result2.ok === true);
+    const data = { results, count: results.length };
+    const result = ok(data);
+    const finalResult = allOk ? result : { ok: false, data };
+    if (allOk) await dedupSave(context, userId, "createTrainingLogsBatch", params.client_id, finalResult);
+    return finalResult;
+  });
+}
+async function updateTrainingLog(context, userId, params) {
+  return withMutationLock(context, async () => {
+    const found = await findRowPosition(context, "Training_Logs", "training_log_id", params.training_log_id);
+    if (!found || text(found.row, "user_id") !== userId) return notFound("\u30ED\u30B0\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
+    const patch = { updated_at: nowIso() };
+    ["training_date", "duration_min", "distance_km", "incline_pct", "memo"].forEach((key) => {
+      if (params[key] !== void 0) patch[key] = params[key];
+    });
+    if (params.rpe !== void 0 || params.rpe_label !== void 0) {
+      const rpe = resolveRpe(params);
+      patch.rpe = rpe.rpe === null ? "" : rpe.rpe;
+      patch.rpe_source = rpe.rpe_source;
+    }
+    const hasSets = params.sets !== void 0;
+    const sets = hasSets && Array.isArray(params.sets) ? params.sets : [];
+    if (hasSets) {
+      const errors = validateSets(sets);
+      if (errors.length) return fail("VALIDATION_ERROR", errors.join(" / "));
+    }
+    const bodyWeight = numberValue(found.row.body_weight, 60) ?? 60;
+    const merged = { ...found.row, ...patch };
+    const master = await masterDefaults(context, found.row.master_id);
+    let calc;
+    if (text(found.row, "training_type") === "cardio") {
+      calc = calculateCardioCalories({ exerciseName: text(found.row, "exercise_name_snapshot"), durationMin: numberValue(merged.duration_min), distanceKm: numberValue(merged.distance_km), defaultMet: master?.default_met_value || 3.5, bodyWeight });
+    } else {
+      const existingSets = hasSets ? sets : await getRows(context, "Training_Sets", (row) => text(row, "training_log_id") === String(params.training_log_id));
+      calc = calculateStrengthCalories({ sets: existingSets, bodyWeight, metCategory: master?.met_category ?? "", durationMin: numberValue(merged.duration_min), rpe: numberValue(merged.rpe) });
+    }
+    patch.estimated_calories = calc.calories;
+    patch.calorie_estimation_method = calc.method;
+    patch.calorie_formula_version = FORMULA_VERSION;
+    const properties = await metadata(context);
+    const requests = updateCellsRequest(properties, "Training_Logs", found.rowNumber, found.header, patch);
+    const touched = ["Training_Logs"];
+    if (hasSets) {
+      const oldSets = await rowsByForeignKey(context, "Training_Sets", "training_log_id", params.training_log_id);
+      requests.push(...deleteRowsRequest(properties, "Training_Sets", oldSets.map((set) => set.rowNumber)));
+      if (sets.length) requests.push(appendRowsRequest(properties, "Training_Sets", await sheetHeader(context, "Training_Sets"), setRows(String(params.training_log_id), sets, nowIso())));
+      touched.push("Training_Sets");
+    }
+    await writeBatch(context, requests, touched);
+    return ok({ training_log_id: params.training_log_id, estimated_calories: calc.calories, calorie_formula_version: FORMULA_VERSION });
+  });
+}
+async function deleteTrainingLog(context, userId, params) {
+  return withMutationLock(context, async () => {
+    const found = await findRowPosition(context, "Training_Logs", "training_log_id", params.training_log_id);
+    if (!found || text(found.row, "user_id") !== userId) return notFound("\u30ED\u30B0\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
+    const properties = await metadata(context);
+    const sets = await rowsByForeignKey(context, "Training_Sets", "training_log_id", params.training_log_id);
+    const requests = deleteRowsRequest(properties, "Training_Sets", sets.map((set) => set.rowNumber));
+    requests.push(...deleteRowsRequest(properties, "Training_Logs", [found.rowNumber]));
+    await writeBatch(context, requests, ["Training_Logs", "Training_Sets"]);
+    return ok({ deleted: true });
+  });
+}
+async function dispatchTrainingMutation(context, userId, action, params) {
+  switch (action) {
+    case "createTrainingMenu":
+      return createTrainingMenu(context, userId, params);
+    case "updateTrainingMenu":
+      return updateTrainingMenu(context, userId, params);
+    case "updateTrainingMenuOrder":
+      return updateTrainingMenuOrder(context, userId, params);
+    case "deleteTrainingMenu":
+      return deleteTrainingMenu(context, userId, params);
+    case "createTrainingLog":
+      return createTrainingLog(context, userId, params);
+    case "createTrainingLogsBatch":
+      return createTrainingLogsBatch(context, userId, params);
+    case "updateTrainingLog":
+      return updateTrainingLog(context, userId, params);
+    case "deleteTrainingLog":
+      return deleteTrainingLog(context, userId, params);
+    default:
+      return fail("NOT_FOUND", `Unknown mutation action: ${action}`);
+  }
+}
+
+// src/server/mutationApi.ts
+var VERCEL_MUTATION_ACTIONS = /* @__PURE__ */ new Set([
+  "createTrainingMenu",
+  "updateTrainingMenu",
+  "updateTrainingMenuOrder",
+  "deleteTrainingMenu",
+  "createTrainingLog",
+  "createTrainingLogsBatch",
+  "updateTrainingLog",
+  "deleteTrainingLog",
+  "createBodyCompositionLog",
+  "deleteBodyCompositionLog"
+]);
+function isMutationAction(action) {
+  return VERCEL_MUTATION_ACTIONS.has(action);
+}
+async function dispatchMutation(context, userId, action, params) {
+  if (action.startsWith("createTraining") || action.startsWith("updateTraining") || action.startsWith("deleteTraining")) {
+    return dispatchTrainingMutation(context, userId, action, params);
+  }
+  if (action.startsWith("createBodyComposition") || action.startsWith("deleteBodyComposition")) {
+    return dispatchBodyMutation(context, userId, action, params);
+  }
+  return fail("NOT_FOUND", `Unknown mutation action: ${action}`);
 }
 
 // src/server/growthApi.ts
@@ -553,11 +1418,11 @@ function buildGrowthSummary_(userId, range, isPremium) {
       };
     });
   }
-  const latestWeight = weightSeries.length ? weightSeries[weightSeries.length - 1].weight_kg : null;
+  const latestWeight2 = weightSeries.length ? weightSeries[weightSeries.length - 1].weight_kg : null;
   let bmi = null;
-  if (latestWeight !== null && user.height !== null && user.height > 0) {
+  if (latestWeight2 !== null && user.height !== null && user.height > 0) {
     const hm = user.height / 100;
-    bmi = Math.round(latestWeight / (hm * hm) * 10) / 10;
+    bmi = Math.round(latestWeight2 / (hm * hm) * 10) / 10;
   }
   const detailRows = bLogs.filter(function(r) {
     return toNumber_(r["body_fat_pct"], null) !== null || toNumber_(r["skeletal_muscle_kg"], null) !== null;
@@ -596,7 +1461,7 @@ function buildGrowthSummary_(userId, range, isPremium) {
   return {
     range: { from, to },
     plan_limits: { range_days: isPremium ? null : 7 },
-    latest_weight_kg: latestWeight,
+    latest_weight_kg: latestWeight2,
     bmi,
     latest_bodycomp: latestBodycomp,
     weight_series: weightSeries,
@@ -1982,88 +2847,88 @@ function growthAction(input, userId, action, params) {
 }
 
 // src/server/readApi.ts
-function text(row, key, fallback = "") {
+function text2(row, key, fallback = "") {
   const value = row[key];
   return value === null || value === void 0 ? fallback : String(value);
 }
-function numberValue(value, fallback = null) {
+function numberValue2(value, fallback = null) {
   if (value === "" || value === null || value === void 0) return fallback;
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
 }
-function bool(value) {
+function bool2(value) {
   return value === true || value === 1 || value === "1" || String(value).toLowerCase() === "true";
 }
-function ok(data) {
+function ok2(data) {
   return { ok: true, data };
 }
-function fail(code, message) {
+function fail2(code, message) {
   return { ok: false, error: { code, message } };
 }
-function notFound(message) {
-  return fail("NOT_FOUND", message);
+function notFound2(message) {
+  return fail2("NOT_FOUND", message);
 }
-async function userRecord(context, userId) {
-  const rows = await getRows(context, "users", (row2) => text(row2, "user_id") === userId);
+async function userRecord2(context, userId) {
+  const rows = await getRows(context, "users", (row2) => text2(row2, "user_id") === userId);
   const row = rows[0];
   return {
     userId,
-    name: row ? text(row, "User_Name") || text(row, "user_name") || "\u30E6\u30FC\u30B6\u30FC" : "\u30E6\u30FC\u30B6\u30FC",
-    weight: numberValue(row?.weight),
-    height: numberValue(row?.height),
-    targetCalories: numberValue(row?.target_calories),
-    isPremium: bool(row?.is_premium)
+    name: row ? text2(row, "User_Name") || text2(row, "user_name") || "\u30E6\u30FC\u30B6\u30FC" : "\u30E6\u30FC\u30B6\u30FC",
+    weight: numberValue2(row?.weight),
+    height: numberValue2(row?.height),
+    targetCalories: numberValue2(row?.target_calories),
+    isPremium: bool2(row?.is_premium)
   };
 }
 function sortByDateDesc(a, b, field) {
   return asDate(b[field]).getTime() - asDate(a[field]).getTime();
 }
 async function trainingMaster(context) {
-  return getRows(context, "Training_Master", (row) => bool(row.is_active));
+  return getRows(context, "Training_Master", (row) => bool2(row.is_active));
 }
 async function trainingMenus(context, userId) {
-  const rows = await getRows(context, "Training_Menus", (row) => text(row, "user_id") === userId && bool(row.is_active));
-  return rows.sort((a, b) => (numberValue(a.display_order, 0) ?? 0) - (numberValue(b.display_order, 0) ?? 0));
+  const rows = await getRows(context, "Training_Menus", (row) => text2(row, "user_id") === userId && bool2(row.is_active));
+  return rows.sort((a, b) => (numberValue2(a.display_order, 0) ?? 0) - (numberValue2(b.display_order, 0) ?? 0));
 }
 async function trainingSetsByLog(context, logIds) {
-  const rows = await getRows(context, "Training_Sets", logIds ? (row) => logIds.has(text(row, "training_log_id")) : void 0);
+  const rows = await getRows(context, "Training_Sets", logIds ? (row) => logIds.has(text2(row, "training_log_id")) : void 0);
   const byLog = /* @__PURE__ */ new Map();
   rows.forEach((row) => {
-    const key = text(row, "training_log_id");
+    const key = text2(row, "training_log_id");
     const list = byLog.get(key) ?? [];
     list.push(row);
     byLog.set(key, list);
   });
-  byLog.forEach((list) => list.sort((a, b) => (numberValue(a.set_no, 0) ?? 0) - (numberValue(b.set_no, 0) ?? 0)));
+  byLog.forEach((list) => list.sort((a, b) => (numberValue2(a.set_no, 0) ?? 0) - (numberValue2(b.set_no, 0) ?? 0)));
   return byLog;
 }
 async function trainingLogs(context, userId) {
   const [logs, allSets] = await Promise.all([
-    getRows(context, "Training_Logs", (row) => text(row, "user_id") === userId),
+    getRows(context, "Training_Logs", (row) => text2(row, "user_id") === userId),
     getRows(context, "Training_Sets")
   ]);
-  const ids = new Set(logs.map((row) => text(row, "training_log_id")));
+  const ids = new Set(logs.map((row) => text2(row, "training_log_id")));
   const setsByLog = /* @__PURE__ */ new Map();
   allSets.forEach((row) => {
-    const key = text(row, "training_log_id");
+    const key = text2(row, "training_log_id");
     if (!ids.has(key)) return;
     const list = setsByLog.get(key) ?? [];
     list.push(row);
     setsByLog.set(key, list);
   });
-  setsByLog.forEach((list) => list.sort((a, b) => (numberValue(a.set_no, 0) ?? 0) - (numberValue(b.set_no, 0) ?? 0)));
+  setsByLog.forEach((list) => list.sort((a, b) => (numberValue2(a.set_no, 0) ?? 0) - (numberValue2(b.set_no, 0) ?? 0)));
   logs.forEach((log) => {
-    log.sets = setsByLog.get(text(log, "training_log_id")) ?? [];
+    log.sets = setsByLog.get(text2(log, "training_log_id")) ?? [];
   });
   return logs.sort((a, b) => sortByDateDesc(a, b, "training_date"));
 }
 async function getTrainingLogs(context, userId, params) {
-  const user = await userRecord(context, userId);
+  const user = await userRecord2(context, userId);
   const all = await trainingLogs(context, userId);
   const defaultFrom = dateKeyOf(addDays(/* @__PURE__ */ new Date(), -6));
   const from = user.isPremium ? String(params.from || defaultFrom) : defaultFrom;
   const to = user.isPremium ? String(params.to || todayKey()) : todayKey();
-  return ok({ logs: all.filter((log) => {
+  return ok2({ logs: all.filter((log) => {
     const key = dateKeyOf(log.training_date);
     return key >= from && key <= to;
   }), from, to, range_restricted: !user.isPremium });
@@ -2071,19 +2936,19 @@ async function getTrainingLogs(context, userId, params) {
 async function getTrainingLogDetail(context, userId, params) {
   const id = String(params.training_log_id ?? "");
   const log = await findById(context, "Training_Logs", "training_log_id", id);
-  if (!log || text(log, "user_id") !== userId) return notFound("\u30ED\u30B0\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
-  const user = await userRecord(context, userId);
-  if (!user.isPremium && dateKeyOf(log.training_date) < dateKeyOf(addDays(/* @__PURE__ */ new Date(), -6))) return notFound("\u30ED\u30B0\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
+  if (!log || text2(log, "user_id") !== userId) return notFound2("\u30ED\u30B0\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
+  const user = await userRecord2(context, userId);
+  if (!user.isPremium && dateKeyOf(log.training_date) < dateKeyOf(addDays(/* @__PURE__ */ new Date(), -6))) return notFound2("\u30ED\u30B0\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093");
   const sets = (await trainingSetsByLog(context, /* @__PURE__ */ new Set([id]))).get(id) ?? [];
   const allSets = await getRows(context, "Training_Sets");
   const countBy = /* @__PURE__ */ new Map();
-  allSets.forEach((set) => countBy.set(text(set, "training_log_id"), (countBy.get(text(set, "training_log_id")) ?? 0) + 1));
-  const masterId = text(log, "master_id");
-  const name = text(log, "exercise_name_snapshot");
+  allSets.forEach((set) => countBy.set(text2(set, "training_log_id"), (countBy.get(text2(set, "training_log_id")) ?? 0) + 1));
+  const masterId = text2(log, "master_id");
+  const name = text2(log, "exercise_name_snapshot");
   const from = dateKeyOf(addDays(/* @__PURE__ */ new Date(), user.isPremium ? -89 : -6));
   const history = (await getRows(context, "Training_Logs", (row) => {
-    if (text(row, "user_id") !== userId || text(row, "training_log_id") === id) return false;
-    const matches = masterId ? text(row, "master_id") === masterId : text(row, "exercise_name_snapshot") === name;
+    if (text2(row, "user_id") !== userId || text2(row, "training_log_id") === id) return false;
+    const matches = masterId ? text2(row, "master_id") === masterId : text2(row, "exercise_name_snapshot") === name;
     const key = dateKeyOf(row.training_date);
     return matches && key >= from && key <= todayKey();
   })).sort((a, b) => sortByDateDesc(a, b, "training_date")).slice(0, 20).map((row) => ({
@@ -2091,21 +2956,21 @@ async function getTrainingLogDetail(context, userId, params) {
     training_date: row.training_date,
     estimated_calories: row.estimated_calories,
     duration_min: row.duration_min,
-    sets_count: countBy.get(text(row, "training_log_id")) ?? 0
+    sets_count: countBy.get(text2(row, "training_log_id")) ?? 0
   }));
-  return ok({ log, sets, history, history_restricted: !user.isPremium });
+  return ok2({ log, sets, history, history_restricted: !user.isPremium });
 }
 async function getDailyCalorieSummary(context, userId, params) {
   const date = params.date ? dateKeyOf(params.date) : todayKey();
   const [meals, exercises, user] = await Promise.all([
-    getRows(context, "logs", (row) => text(row, "user_id") === userId && dateKeyOf(row.timestamp) === date),
-    getRows(context, "Training_Logs", (row) => text(row, "user_id") === userId && dateKeyOf(row.training_date) === date),
-    userRecord(context, userId)
+    getRows(context, "logs", (row) => text2(row, "user_id") === userId && dateKeyOf(row.timestamp) === date),
+    getRows(context, "Training_Logs", (row) => text2(row, "user_id") === userId && dateKeyOf(row.training_date) === date),
+    userRecord2(context, userId)
   ]);
   const target = user.targetCalories || 2e3;
-  const intake = meals.reduce((sum, row) => sum + (numberValue(row.calories, 0) ?? 0), 0);
-  const exercise = exercises.reduce((sum, row) => sum + (numberValue(row.estimated_calories, 0) ?? 0), 0);
-  return ok({ date, target_calories: target, intake_calories: intake, remaining_calories: target - intake, estimated_exercise_calories: exercise, exercise_note: "\u30BB\u30C3\u30C8\u5185\u5BB9\u7B49\u304B\u3089\u63A8\u5B9A\u3057\u305F\u53C2\u8003\u5024\u3067\u3059" });
+  const intake = meals.reduce((sum, row) => sum + (numberValue2(row.calories, 0) ?? 0), 0);
+  const exercise = exercises.reduce((sum, row) => sum + (numberValue2(row.estimated_calories, 0) ?? 0), 0);
+  return ok2({ date, target_calories: target, intake_calories: intake, remaining_calories: target - intake, estimated_exercise_calories: exercise, exercise_note: "\u30BB\u30C3\u30C8\u5185\u5BB9\u7B49\u304B\u3089\u63A8\u5B9A\u3057\u305F\u53C2\u8003\u5024\u3067\u3059" });
 }
 function weekStart(dateKey) {
   const date = /* @__PURE__ */ new Date(`${dateKey}T00:00:00+09:00`);
@@ -2116,22 +2981,22 @@ function weekStart(dateKey) {
 function buildGlance(logs, setsByLog, meals) {
   const blocks = {};
   const today = todayKey();
-  const todayLogs = logs.filter((log) => dateKeyOf(log.training_date) === today).sort((a, b) => text(b, "created_at").localeCompare(text(a, "created_at")));
+  const todayLogs = logs.filter((log) => dateKeyOf(log.training_date) === today).sort((a, b) => text2(b, "created_at").localeCompare(text2(a, "created_at")));
   if (todayLogs.length) {
     const log = todayLogs[0];
-    const sets = setsByLog.get(text(log, "training_log_id")) ?? [];
-    let sentence = `${text(log, "exercise_name_snapshot")}\u3092\u8A18\u9332`;
+    const sets = setsByLog.get(text2(log, "training_log_id")) ?? [];
+    let sentence = `${text2(log, "exercise_name_snapshot")}\u3092\u8A18\u9332`;
     if (sets.length) {
       const set = sets[0];
-      const weight = numberValue(set.weight_kg);
-      sentence = `${text(log, "exercise_name_snapshot")} ${bool(set.is_bodyweight) ? "\u81EA\u91CD" : weight === null ? "" : `${weight}kg`}\xD7${numberValue(set.reps, 0) ?? 0}\u3092\u8A18\u9332`;
-    } else if ((numberValue(log.duration_min, 0) ?? 0) > 0) {
-      sentence = `${text(log, "exercise_name_snapshot")} ${numberValue(log.duration_min, 0)}\u5206\u3092\u8A18\u9332`;
+      const weight = numberValue2(set.weight_kg);
+      sentence = `${text2(log, "exercise_name_snapshot")} ${bool2(set.is_bodyweight) ? "\u81EA\u91CD" : weight === null ? "" : `${weight}kg`}\xD7${numberValue2(set.reps, 0) ?? 0}\u3092\u8A18\u9332`;
+    } else if ((numberValue2(log.duration_min, 0) ?? 0) > 0) {
+      sentence = `${text2(log, "exercise_name_snapshot")} ${numberValue2(log.duration_min, 0)}\u5206\u3092\u8A18\u9332`;
     }
     blocks.D1 = { status: "ready", data: { text: sentence } };
   } else {
     const todayMeals = meals.filter((meal) => dateKeyOf(meal.timestamp) === today);
-    blocks.D1 = todayMeals.length ? { status: "ready", data: { text: `${text(todayMeals[todayMeals.length - 1], "menu_name") || "\u98DF\u4E8B"}\u3092\u8A18\u9332` } } : { status: "empty", message: "\u307E\u3060\u30C7\u30FC\u30BF\u304C\u8DB3\u308A\u307E\u305B\u3093" };
+    blocks.D1 = todayMeals.length ? { status: "ready", data: { text: `${text2(todayMeals[todayMeals.length - 1], "menu_name") || "\u98DF\u4E8B"}\u3092\u8A18\u9332` } } : { status: "empty", message: "\u307E\u3060\u30C7\u30FC\u30BF\u304C\u8DB3\u308A\u307E\u305B\u3093" };
   }
   const currentWeek = weekStart(today);
   const days = new Set(logs.filter((log) => weekStart(dateKeyOf(log.training_date)) === currentWeek).map((log) => dateKeyOf(log.training_date)));
@@ -2152,11 +3017,11 @@ function buildGlance(logs, setsByLog, meals) {
 }
 async function getDashboardAll(context, userId, params) {
   const [user, logs, meals] = await Promise.all([
-    userRecord(context, userId),
-    getRows(context, "Training_Logs", (row) => text(row, "user_id") === userId),
-    getRows(context, "logs", (row) => text(row, "user_id") === userId)
+    userRecord2(context, userId),
+    getRows(context, "Training_Logs", (row) => text2(row, "user_id") === userId),
+    getRows(context, "logs", (row) => text2(row, "user_id") === userId)
   ]);
-  const ids = new Set(logs.map((row) => text(row, "training_log_id")));
+  const ids = new Set(logs.map((row) => text2(row, "training_log_id")));
   const [setsByLog, summaryResult, goalResult] = await Promise.all([
     trainingSetsByLog(context, ids),
     getDailyCalorieSummary(context, userId, params),
@@ -2165,11 +3030,11 @@ async function getDashboardAll(context, userId, params) {
   if (!summaryResult.ok) return summaryResult;
   const goalBanner = goalResult.ok ? buildGoalBanner(goalResult.data) : { show: false, message: "" };
   const glance = buildGlance(logs, setsByLog, meals);
-  return ok({ summary: summaryResult.data, dashboard: { user: { name: user.name, isPremium: user.isPremium }, glance }, glance, goal_banner: goalBanner });
+  return ok2({ summary: summaryResult.data, dashboard: { user: { name: user.name, isPremium: user.isPremium }, glance }, glance, goal_banner: goalBanner });
 }
 function buildGoalBanner(data) {
   const active = data?.active_plan;
-  const end = text(active ?? {}, "planned_end_date").slice(0, 10);
+  const end = text2(active ?? {}, "planned_end_date").slice(0, 10);
   const show = !!end && todayKey() > end;
   return { show, message: show ? "\u76EE\u6A19\u671F\u9593\u304C\u7D42\u4E86\u3057\u3066\u3044\u307E\u3059\u3002\u73FE\u5728\u306E\u4F53\u91CD\u30FB\u4F53\u7D44\u6210\u3092\u78BA\u8A8D\u3057\u3001\u5FC5\u8981\u306B\u5FDC\u3058\u3066\u76EE\u6A19\u3092\u66F4\u65B0\u3057\u3066\u304F\u3060\u3055\u3044\u3002" : "" };
 }
@@ -2179,7 +3044,7 @@ function nutritionBounds(range) {
 }
 async function mealDays(context, userId, bounds) {
   const days = /* @__PURE__ */ new Map();
-  const rows = await getRows(context, "logs", (row) => text(row, "user_id") === userId);
+  const rows = await getRows(context, "logs", (row) => text2(row, "user_id") === userId);
   rows.forEach((row) => {
     const key = dateKeyOf(row.timestamp);
     if (!inBounds(key, bounds)) return;
@@ -2208,7 +3073,7 @@ async function mealDays(context, userId, bounds) {
     };
     day.meals_count += 1;
     ["calories", "protein", "fat", "carbs", "fiber", "calcium", "iron", "potassium", "magnesium", "zinc", "vit_a", "vit_c", "vit_d", "vit_e", "vit_b1", "vit_b2", "vit_b6", "vit_b12", "folate"].forEach((field) => {
-      day[field] += numberValue(row[field], 0) ?? 0;
+      day[field] += numberValue2(row[field], 0) ?? 0;
     });
     days.set(key, day);
   });
@@ -2219,26 +3084,26 @@ function inBounds(key, bounds) {
 }
 async function nutritionProfile(context, userId) {
   const row = await findById(context, "users", "user_id", userId);
-  return row ? { gender: text(row, "gender"), age: numberValue(row.age), isPremium: bool(row.is_premium) } : null;
+  return row ? { gender: text2(row, "gender"), age: numberValue2(row.age), isPremium: bool2(row.is_premium) } : null;
 }
 function pfcRange(age) {
   return { protein_pct: age !== null && age >= 50 && age <= 64 ? [14, 20] : [13, 20], fat_pct: [20, 30], carbs_pct: [50, 65] };
 }
 async function nutritionReferences(context, gender, age) {
   const band = age !== null && age >= 18 && age <= 29 ? [18, 29] : age !== null && age >= 50 && age <= 64 ? [50, 64] : [30, 49];
-  const rows = await getRows(context, "Nutrition_Reference", (row) => bool(row.is_active) && text(row, "gender") === gender && numberValue(row.age_min) === band[0] && numberValue(row.age_max) === band[1]);
+  const rows = await getRows(context, "Nutrition_Reference", (row) => bool2(row.is_active) && text2(row, "gender") === gender && numberValue2(row.age_min) === band[0] && numberValue2(row.age_max) === band[1]);
   const result = {};
   rows.forEach((row) => {
-    const parts2 = text(row, "nutrient_id").split("_");
+    const parts2 = text2(row, "nutrient_id").split("_");
     const key = parts2.slice(0, Math.max(parts2.length - 3, 1)).join("_");
-    result[key] = { value: numberValue(row.reference_value, 0) ?? 0, type: text(row, "reference_type"), unit: text(row, "unit"), name: text(row, "nutrient_name") };
+    result[key] = { value: numberValue2(row.reference_value, 0) ?? 0, type: text2(row, "reference_type"), unit: text2(row, "unit"), name: text2(row, "nutrient_name") };
   });
   return result;
 }
 async function getNutritionAnalysis(context, userId, params) {
-  const user = await userRecord(context, userId);
+  const user = await userRecord2(context, userId);
   const range = String(params.range || "7d");
-  if (!["7d", "30d", "90d", "1y", "all"].includes(range)) return fail("VALIDATION_ERROR", "range\u304C\u4E0D\u6B63\u3067\u3059");
+  if (!["7d", "30d", "90d", "1y", "all"].includes(range)) return fail2("VALIDATION_ERROR", "range\u304C\u4E0D\u6B63\u3067\u3059");
   const effective = user.isPremium ? range : "7d";
   const bounds = nutritionBounds(effective);
   const days = await mealDays(context, userId, bounds);
@@ -2297,20 +3162,20 @@ async function getNutritionAnalysis(context, userId, params) {
   const n4 = !recorded ? { status: "empty" } : recorded < 3 ? { status: "insufficient" } : { status: "ok", avg_meals_per_day: Math.round(days.reduce((sum, day) => sum + day.meals_count, 0) / recorded * 10) / 10 };
   const menuAgg = /* @__PURE__ */ new Map();
   if (recorded) {
-    const rows = await getRows(context, "logs", (row) => text(row, "user_id") === userId);
+    const rows = await getRows(context, "logs", (row) => text2(row, "user_id") === userId);
     rows.forEach((row) => {
       if (!inBounds(dateKeyOf(row.timestamp), bounds)) return;
-      const name = text(row, "menu_name").trim();
+      const name = text2(row, "menu_name").trim();
       if (!name) return;
       const current = menuAgg.get(name) ?? { count: 0, cal: 0, protein: 0 };
       current.count += 1;
-      current.cal += numberValue(row.calories, 0) ?? 0;
-      current.protein += numberValue(row.protein, 0) ?? 0;
+      current.cal += numberValue2(row.calories, 0) ?? 0;
+      current.protein += numberValue2(row.protein, 0) ?? 0;
       menuAgg.set(name, current);
     });
   }
   const n5 = [...menuAgg.entries()].map(([menu_name, value]) => ({ menu_name, count: value.count, avg_calories: Math.round(value.cal / value.count), avg_protein_g: Math.round(value.protein / value.count * 10) / 10 })).sort((a, b) => b.count - a.count).slice(0, 5);
-  return ok({
+  return ok2({
     range: effective,
     recorded_days: recorded,
     status: recorded === 0 ? "empty" : recorded < 3 ? "insufficient" : "ok",
@@ -2330,57 +3195,57 @@ async function getNutritionAnalysis(context, userId, params) {
   });
 }
 async function getFoodHistory(context, userId, params) {
-  const user = await userRecord(context, userId);
+  const user = await userRecord2(context, userId);
   const range = String(params.range || "7d");
-  if (!["7d", "30d", "90d", "1y", "all"].includes(range)) return fail("VALIDATION_ERROR", "range\u304C\u4E0D\u6B63\u3067\u3059");
+  if (!["7d", "30d", "90d", "1y", "all"].includes(range)) return fail2("VALIDATION_ERROR", "range\u304C\u4E0D\u6B63\u3067\u3059");
   const effective = user.isPremium ? range : "7d";
   const days = await mealDays(context, userId, nutritionBounds(effective));
-  return ok({ range: effective, days: days.map((day) => ({ date: day.date, meals_count: day.meals_count, calories: day.calories, protein: Math.round(day.protein * 10) / 10 })) });
+  return ok2({ range: effective, days: days.map((day) => ({ date: day.date, meals_count: day.meals_count, calories: day.calories, protein: Math.round(day.protein * 10) / 10 })) });
 }
 async function getFoodDay(context, userId, params) {
   const date = String(params.date || "");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return fail("VALIDATION_ERROR", "date\u5F62\u5F0F\u304C\u4E0D\u6B63\u3067\u3059");
-  const user = await userRecord(context, userId);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return fail2("VALIDATION_ERROR", "date\u5F62\u5F0F\u304C\u4E0D\u6B63\u3067\u3059");
+  const user = await userRecord2(context, userId);
   const bounds = nutritionBounds("7d");
-  if (!user.isPremium && !inBounds(date, bounds)) return notFound("\u7121\u6599\u30D7\u30E9\u30F3\u306E\u671F\u9593\u5916\u3067\u3059");
-  const rows = (await getRows(context, "logs", (row) => text(row, "user_id") === userId && dateKeyOf(row.timestamp) === date)).sort((a, b) => asDate(a.timestamp).getTime() - asDate(b.timestamp).getTime() || text(a, "log_id").localeCompare(text(b, "log_id")));
-  return ok({ date, status: rows.length ? "ok" : "empty", meals: rows.map((row) => ({
+  if (!user.isPremium && !inBounds(date, bounds)) return notFound2("\u7121\u6599\u30D7\u30E9\u30F3\u306E\u671F\u9593\u5916\u3067\u3059");
+  const rows = (await getRows(context, "logs", (row) => text2(row, "user_id") === userId && dateKeyOf(row.timestamp) === date)).sort((a, b) => asDate(a.timestamp).getTime() - asDate(b.timestamp).getTime() || text2(a, "log_id").localeCompare(text2(b, "log_id")));
+  return ok2({ date, status: rows.length ? "ok" : "empty", meals: rows.map((row) => ({
     timestamp: formatFoodTimestamp(row.timestamp),
-    menu_name: text(row, "menu_name"),
-    calories: numberValue(row.calories, 0) ?? 0,
-    protein: Math.round((numberValue(row.protein, 0) ?? 0) * 10) / 10,
-    fat: Math.round((numberValue(row.fat, 0) ?? 0) * 10) / 10,
-    carbs: Math.round((numberValue(row.carbs, 0) ?? 0) * 10) / 10,
-    advice: text(row, "advice")
+    menu_name: text2(row, "menu_name"),
+    calories: numberValue2(row.calories, 0) ?? 0,
+    protein: Math.round((numberValue2(row.protein, 0) ?? 0) * 10) / 10,
+    fat: Math.round((numberValue2(row.fat, 0) ?? 0) * 10) / 10,
+    carbs: Math.round((numberValue2(row.carbs, 0) ?? 0) * 10) / 10,
+    advice: text2(row, "advice")
   })) });
 }
 async function getGoalPlans(context, userId) {
-  const rows = await getRows(context, "Goal_Plans", (row) => text(row, "user_id") === userId);
+  const rows = await getRows(context, "Goal_Plans", (row) => text2(row, "user_id") === userId);
   let active = null;
   const history = [];
   rows.forEach((row) => {
-    if (text(row, "status").toLowerCase() === "active") {
-      if (!active || text(row, "start_date") > text(active, "start_date")) {
+    if (text2(row, "status").toLowerCase() === "active") {
+      if (!active || text2(row, "start_date") > text2(active, "start_date")) {
         if (active) history.push(active);
         active = row;
       } else history.push(row);
     } else history.push(row);
   });
-  history.sort((a, b) => text(b, "start_date").localeCompare(text(a, "start_date")));
-  return ok({ active_plan: active, history, notes: { disclaimer: "\u76EE\u6A19\u9054\u6210\u5EA6\u304A\u3088\u3073\u8868\u793A\u306F\u73FE\u5728\u8A2D\u5B9A\u3055\u308C\u3066\u3044\u308B\u76EE\u6A19\u30D7\u30E9\u30F3\u306B\u57FA\u3065\u304F\u53C2\u8003\u5024\u3067\u3059\u3002" } });
+  history.sort((a, b) => text2(b, "start_date").localeCompare(text2(a, "start_date")));
+  return ok2({ active_plan: active, history, notes: { disclaimer: "\u76EE\u6A19\u9054\u6210\u5EA6\u304A\u3088\u3073\u8868\u793A\u306F\u73FE\u5728\u8A2D\u5B9A\u3055\u308C\u3066\u3044\u308B\u76EE\u6A19\u30D7\u30E9\u30F3\u306B\u57FA\u3065\u304F\u53C2\u8003\u5024\u3067\u3059\u3002" } });
 }
 async function getTrainingBoard(context, userId) {
   const [user, menus, allLogs] = await Promise.all([
-    userRecord(context, userId),
+    userRecord2(context, userId),
     trainingMenus(context, userId),
     getRows(context, "Training_Logs")
   ]);
   const from = dateKeyOf(addDays(/* @__PURE__ */ new Date(), user.isPremium ? -89 : -6));
-  const logs = allLogs.filter((row) => text(row, "user_id") === userId && dateKeyOf(row.training_date) >= from);
+  const logs = allLogs.filter((row) => text2(row, "user_id") === userId && dateKeyOf(row.training_date) >= from);
   const setsByLog = await trainingSetsByLog(context);
   const logsByMenu = /* @__PURE__ */ new Map();
   logs.forEach((log) => {
-    const key = text(log, "menu_id");
+    const key = text2(log, "menu_id");
     if (!key) return;
     const list = logsByMenu.get(key) ?? [];
     list.push(log);
@@ -2388,10 +3253,10 @@ async function getTrainingBoard(context, userId) {
   });
   const groups = /* @__PURE__ */ new Map();
   menus.forEach((menu) => {
-    const group = text(menu, "training_group", "\u305D\u306E\u4ED6") || "\u305D\u306E\u4ED6";
+    const group = text2(menu, "training_group", "\u305D\u306E\u4ED6") || "\u305D\u306E\u4ED6";
     if (group === "\u305D\u306E\u4ED6") return;
     const byDate = /* @__PURE__ */ new Map();
-    (logsByMenu.get(text(menu, "menu_id")) ?? []).sort((a, b) => sortByDateDesc(a, b, "training_date")).forEach((log) => {
+    (logsByMenu.get(text2(menu, "menu_id")) ?? []).sort((a, b) => sortByDateDesc(a, b, "training_date")).forEach((log) => {
       const key = dateKeyOf(log.training_date);
       const list = byDate.get(key) ?? [];
       list.push(log);
@@ -2400,25 +3265,25 @@ async function getTrainingBoard(context, userId) {
     const dates = [...byDate.keys()].sort().reverse().slice(0, 2);
     const sessions = dates.map((date) => ({ date, entries: (byDate.get(date) ?? []).map((log) => ({
       training_log_id: log.training_log_id,
-      time: text(log, "created_at").includes("T") ? text(log, "created_at").slice(text(log, "created_at").indexOf("T") + 1, text(log, "created_at").indexOf("T") + 6) : "",
+      time: text2(log, "created_at").includes("T") ? text2(log, "created_at").slice(text2(log, "created_at").indexOf("T") + 1, text2(log, "created_at").indexOf("T") + 6) : "",
       duration_min: log.duration_min,
       distance_km: log.distance_km,
       rpe: log.rpe,
       memo: log.memo,
-      sets: (setsByLog.get(text(log, "training_log_id")) ?? []).map((set) => ({ weight_kg: set.weight_kg, reps: set.reps, rpe: set.rpe, is_bodyweight: set.is_bodyweight }))
+      sets: (setsByLog.get(text2(log, "training_log_id")) ?? []).map((set) => ({ weight_kg: set.weight_kg, reps: set.reps, rpe: set.rpe, is_bodyweight: set.is_bodyweight }))
     })) }));
     const item = { menu_id: menu.menu_id, menu_name: menu.menu_name, training_type: menu.training_type, last_date: dates[0] ?? null, sessions };
     groups.set(group, [...groups.get(group) ?? [], item]);
   });
-  return ok({ groups: [...groups.entries()].map(([group, items]) => ({ group, last_date: items.reduce((last, item) => {
+  return ok2({ groups: [...groups.entries()].map(([group, items]) => ({ group, last_date: items.reduce((last, item) => {
     const date = item.last_date ?? null;
     return date && (!last || date > last) ? date : last;
   }, null), items })) });
 }
 async function getBodyComposition(context, userId, params) {
   const [user, allRows] = await Promise.all([
-    userRecord(context, userId),
-    getRows(context, "Body_Composition", (row) => text(row, "user_id") === userId)
+    userRecord2(context, userId),
+    getRows(context, "Body_Composition", (row) => text2(row, "user_id") === userId)
   ]);
   const all = allRows.sort((a, b) => {
     const diff = sortByDateDesc(a, b, "measured_at");
@@ -2429,22 +3294,22 @@ async function getBodyComposition(context, userId, params) {
   const trend = all.filter((row) => {
     const key = dateKeyOf(row.measured_at);
     return (!from || key >= from) && (!to || key <= to);
-  }).map((row) => ({ body_log_id: row.body_log_id, measured_at: row.measured_at, weight_kg: numberValue(row.weight_kg) }));
+  }).map((row) => ({ body_log_id: row.body_log_id, measured_at: row.measured_at, weight_kg: numberValue2(row.weight_kg) }));
   const detailFields = ["body_fat_pct", "skeletal_muscle_kg", "muscle_mass_kg", "body_water_pct", "visceral_fat", "bmr", "waist_cm"];
-  const details = all.filter((row) => detailFields.some((field) => numberValue(row[field]) !== null)).slice(0, 2).map((row) => ({
+  const details = all.filter((row) => detailFields.some((field) => numberValue2(row[field]) !== null)).slice(0, 2).map((row) => ({
     measured_at: row.measured_at,
     measurement_device: row.measurement_device,
-    body_fat_pct: numberValue(row.body_fat_pct),
-    skeletal_muscle_kg: numberValue(row.skeletal_muscle_kg),
-    muscle_mass_kg: numberValue(row.muscle_mass_kg),
-    body_water_pct: numberValue(row.body_water_pct),
-    visceral_fat: numberValue(row.visceral_fat),
-    bmr: numberValue(row.bmr),
-    waist_cm: numberValue(row.waist_cm)
+    body_fat_pct: numberValue2(row.body_fat_pct),
+    skeletal_muscle_kg: numberValue2(row.skeletal_muscle_kg),
+    muscle_mass_kg: numberValue2(row.muscle_mass_kg),
+    body_water_pct: numberValue2(row.body_water_pct),
+    visceral_fat: numberValue2(row.visceral_fat),
+    bmr: numberValue2(row.bmr),
+    waist_cm: numberValue2(row.waist_cm)
   }));
-  const latest = all.map((row) => numberValue(row.weight_kg)).find((value) => value !== null) ?? null;
+  const latest = all.map((row) => numberValue2(row.weight_kg)).find((value) => value !== null) ?? null;
   const bmi = latest !== null && user.height !== null && user.height > 0 ? Math.round(latest / (user.height / 100) ** 2 * 10) / 10 : null;
-  return ok({ weight_trend: trend, detail_records: details, latest_weight_kg: latest, bmi, plan_limits: { weight_days: user.isPremium ? null : 7, detail_records: 2 } });
+  return ok2({ weight_trend: trend, detail_records: details, latest_weight_kg: latest, bmi, plan_limits: { weight_days: user.isPremium ? null : 7, detail_records: 2 } });
 }
 var GROWTH_SHEETS = ["users", "Training_Logs", "Training_Sets", "Body_Composition", "logs", "Training_Master", "Training_Menus", "Goal_Plans"];
 async function growthDispatch(context, userId, action, params) {
@@ -2456,10 +3321,10 @@ async function growthDispatch(context, userId, action, params) {
 async function dispatchRead(context, userId, action, params) {
   switch (action) {
     case "getTrainingMaster":
-      return ok({ exercises: await trainingMaster(context) });
+      return ok2({ exercises: await trainingMaster(context) });
     case "getTrainingMenus": {
-      const [user, menus] = await Promise.all([userRecord(context, userId), trainingMenus(context, userId)]);
-      return ok({ menus, limit: user.isPremium ? null : 5 });
+      const [user, menus] = await Promise.all([userRecord2(context, userId), trainingMenus(context, userId)]);
+      return ok2({ menus, limit: user.isPremium ? null : 5 });
     }
     case "getTrainingLogs":
       return getTrainingLogs(context, userId, params);
@@ -2467,11 +3332,11 @@ async function dispatchRead(context, userId, action, params) {
       return getTrainingLogDetail(context, userId, params);
     case "getTrainingFormInit": {
       const [user, menus, exercises] = await Promise.all([
-        userRecord(context, userId),
+        userRecord2(context, userId),
         trainingMenus(context, userId),
         trainingMaster(context)
       ]);
-      return ok({ menus, limit: user.isPremium ? null : 5, exercises });
+      return ok2({ menus, limit: user.isPremium ? null : 5, exercises });
     }
     case "getTrainingBoard":
       return getTrainingBoard(context, userId);
@@ -2497,13 +3362,20 @@ async function dispatchRead(context, userId, action, params) {
     case "getBodyAnalysis":
       return growthDispatch(context, userId, action, params);
     default:
-      return fail("MIGRATION_PENDING", "\u3053\u306EAPI action\u306FVercel\u79FB\u884C\u306E\u6E96\u5099\u4E2D\u3067\u3059");
+      return fail2("MIGRATION_PENDING", "\u3053\u306EAPI action\u306FVercel\u79FB\u884C\u306E\u6E96\u5099\u4E2D\u3067\u3059");
   }
 }
 
 // api/index.ts
-function failure2(code, message) {
+function failure(code, message) {
   return { ok: false, error: { code, message } };
+}
+function statusFor(result) {
+  if (result.ok) return 200;
+  if (result.error.code === "AUTH_FAILED") return 401;
+  if (result.error.code === "NOT_FOUND") return 404;
+  if (result.error.code === "SERVER_ERROR") return 503;
+  return 400;
 }
 async function requestBody(req) {
   if (typeof req.body === "string" || Buffer.isBuffer(req.body)) return JSON.parse(String(req.body));
@@ -2532,34 +3404,25 @@ async function handler(req, res) {
     return;
   }
   if (req.method !== "POST") {
-    res.status(405).json(failure2("METHOD_NOT_ALLOWED", "POST\u306E\u307F\u5BFE\u5FDC\u3057\u3066\u3044\u307E\u3059"));
+    res.status(405).json(failure("METHOD_NOT_ALLOWED", "POST\u306E\u307F\u5BFE\u5FDC\u3057\u3066\u3044\u307E\u3059"));
     return;
   }
   let request;
   try {
     request = await requestBody(req);
   } catch {
-    res.status(400).json(failure2("VALIDATION_ERROR", "\u30EA\u30AF\u30A8\u30B9\u30C8\u5F62\u5F0F\u304C\u4E0D\u6B63\u3067\u3059"));
+    res.status(400).json(failure("VALIDATION_ERROR", "\u30EA\u30AF\u30A8\u30B9\u30C8\u5F62\u5F0F\u304C\u4E0D\u6B63\u3067\u3059"));
     return;
   }
   const action = String(request.action ?? "");
   const params = request.params && typeof request.params === "object" ? request.params : {};
   if (!request.token) {
-    res.status(401).json(failure2("AUTH_FAILED", "Token is required"));
-    return;
-  }
-  if (isMutationAction(action)) {
-    try {
-      const proxied = await proxyMutation(request);
-      res.status(proxied.status).json(proxied.body);
-    } catch {
-      res.status(502).json(failure2("GAS_PROXY_ERROR", "GAS\u30D0\u30C3\u30AF\u30A8\u30F3\u30C9\u3078\u306E\u8EE2\u9001\u306B\u5931\u6557\u3057\u307E\u3057\u305F"));
-    }
+    res.status(401).json(failure("AUTH_FAILED", "Token is required"));
     return;
   }
   const userId = await checkAuth(request.token);
   if (!userId) {
-    res.status(401).json(failure2("AUTH_FAILED", "Invalid token or LINE API error"));
+    res.status(401).json(failure("AUTH_FAILED", "Invalid token or LINE API error"));
     return;
   }
   try {
@@ -2568,10 +3431,10 @@ async function handler(req, res) {
       return;
     }
     const context = createRequestContext();
-    const result = await dispatchRead(context, userId, action, params);
-    res.status(result.ok ? 200 : result.error.code === "NOT_FOUND" ? 404 : 400).json(result);
+    const result = isMutationAction(action) ? await dispatchMutation(context, userId, action, params) : await dispatchRead(context, userId, action, params);
+    res.status(statusFor(result)).json(result);
   } catch {
-    res.status(500).json(failure2("SERVER_ERROR", "\u30B5\u30FC\u30D0\u30FC\u51E6\u7406\u306B\u5931\u6557\u3057\u307E\u3057\u305F"));
+    res.status(500).json(failure("SERVER_ERROR", "\u30B5\u30FC\u30D0\u30FC\u51E6\u7406\u306B\u5931\u6557\u3057\u307E\u3057\u305F"));
   }
 }
 export {
