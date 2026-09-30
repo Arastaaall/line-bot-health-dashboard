@@ -19,7 +19,7 @@ const COLORS = ['#2563eb', '#10b981', '#f59e0b'];
 
 function loadGrowth(range: string) {
   return callApi('getGrowthAll', { range }).catch((e: any) => {
-    // GASの新バージョン反映前だけ、既存actionへ戻して画面を継続利用する。
+    // API bundleの旧バージョンだけ、既存actionへ戻して画面を継続利用する。
     if (e.code !== 'NOT_FOUND') throw e;
     return Promise.all([
       callApi('getGrowthSummary', { range }),

@@ -23,11 +23,15 @@ function LegacyDashboard({ legacy }: { legacy: any }) {
       <div className="grid gap-4 md:grid-cols-2">
         <div className="rounded-xl bg-white p-4 shadow-sm">
           <p className="mb-3 text-sm font-bold text-gray-600">PFCバランス（過去7日間平均 vs 理想）</p>
-          <PfcBalanceChart actual={pfc} ideal={[ideal.protein, ideal.fat, ideal.carbs]} />
+          <div className="mx-auto w-full max-w-[320px]">
+            <PfcBalanceChart actual={pfc} ideal={[ideal.protein, ideal.fat, ideal.carbs]} height={220} />
+          </div>
         </div>
         <div className="rounded-xl bg-white p-4 shadow-sm">
           <p className="mb-3 text-sm font-bold text-gray-600">栄養バランス（過去7日間平均）</p>
-          <RadarChart labels={[...LEGACY_RADAR_LABELS]} values={radarValues} />
+          <div className="mx-auto w-full max-w-[320px]">
+            <RadarChart labels={[...LEGACY_RADAR_LABELS]} values={radarValues} height={248} />
+          </div>
         </div>
       </div>
 

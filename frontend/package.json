@@ -7,7 +7,7 @@
     "dev": "vite",
     "typecheck:api": "tsc -p tsconfig.api.json --noEmit",
     "test:api": "node --experimental-strip-types scripts/api-smoke.mjs",
-    "test:api:parity": "node --experimental-strip-types scripts/gas-read-parity-smoke.mjs",
+    "test:api:contract": "node --experimental-strip-types scripts/api-contract-smoke.mjs",
     "test:date": "node --experimental-strip-types scripts/date-regression-smoke.mjs",
     "build:api": "esbuild ./api/index.ts --bundle --platform=node --target=node20 --format=esm --outfile=./api/index.js",
     "build": "npm run typecheck:api && npm run build:api && tsc -b && vite build",

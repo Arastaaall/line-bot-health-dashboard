@@ -72,7 +72,7 @@ export class SheetsClient {
     const token = await getGoogleAccessToken();
     const query = new URLSearchParams({
       majorDimension: 'ROWS',
-      // Preserve GAS getValues() number/boolean types while keeping date cells
+      // Preserve spreadsheet number/boolean types while keeping date cells
       // readable instead of exposing Sheets' serial-date numbers.
       valueRenderOption: 'UNFORMATTED_VALUE',
       dateTimeRenderOption: options.dateTimeRenderOption ?? 'FORMATTED_STRING',

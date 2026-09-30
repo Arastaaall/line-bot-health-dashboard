@@ -1,5 +1,5 @@
 // 手製SVGグラフ（依存ライブラリ追加禁止方針）
-// X軸: <=8点は全日付+曜日、それ以外は5点のM/D
+// X軸: <=5点は全日付+曜日、6〜8点は全日付のM/D、それ以外は5点のM/D
 // Y軸: 4分割目盛り＋薄いグリッド線
 
 const WEEK = ['日', '月', '火', '水', '木', '金', '土'];
@@ -30,7 +30,8 @@ function fmtVal(v: number) {
 
 function axisTicks(count: number) {
   const withWeekday = count <= 5;
-  return { withWeekday, indices: tickIndices(count, withWeekday ? count : 5) };
+  const maxTicks = count <= 8 ? count : 5;
+  return { withWeekday, indices: tickIndices(count, maxTicks) };
 }
 
 function yTicks(min: number, max: number, count = 4) {

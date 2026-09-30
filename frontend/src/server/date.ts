@@ -27,7 +27,7 @@ export function asDate(value: unknown): Date {
   }
   const source = String(value ?? '').trim();
   if (!source) return new Date(Number.NaN);
-  // GAS writes local JST strings without an offset. Interpret those strings in
+  // Legacy spreadsheet writes local JST strings without an offset. Interpret those strings in
   // JST instead of letting the Vercel UTC runtime silently shift them.
   if (!/[zZ]|[+-]\d{2}:?\d{2}$/.test(source)) {
     const iso = source.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);

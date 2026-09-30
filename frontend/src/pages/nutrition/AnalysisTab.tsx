@@ -1,6 +1,26 @@
 import PfcDonut from './components/PfcDonut';
 import NutrientBar from './components/NutrientBar';
 
+const NUTRIENT_GROUPS = [
+  { label: 'ビタミン', keys: ['vit_a', 'vit_b1', 'vit_b2', 'vit_b6', 'vit_b12', 'vit_c', 'vit_d', 'vit_e', 'folate'] },
+  { label: 'ミネラル', keys: ['calcium', 'iron', 'potassium', 'magnesium', 'zinc'] },
+  { label: '食物繊維', keys: ['fiber'] },
+] as const;
+
+type NutrientGroup = { label: string; keys: readonly string[]; nutrients: any[] };
+
+function groupNutrients(nutrients: any[]): NutrientGroup[] {
+  const byKey = new Map(nutrients.map((nutrient) => [nutrient.key, nutrient]));
+  const grouped: NutrientGroup[] = NUTRIENT_GROUPS.map((group) => ({
+    ...group,
+    nutrients: group.keys.map((key) => byKey.get(key)).filter(Boolean),
+  })).filter((group) => group.nutrients.length > 0);
+  const known = new Set(NUTRIENT_GROUPS.flatMap((group) => group.keys));
+  const other = nutrients.filter((nutrient) => !known.has(nutrient.key));
+  if (other.length) grouped.push({ label: 'その他', keys: [], nutrients: other });
+  return grouped;
+}
+
 function Insufficient({ b }: { b: any }) {
   return <p className="text-xs text-gray-400 py-2">{b?.status === 'empty' ? '記録がありません' : 'まだデータが足りません'}</p>;
 }
@@ -35,9 +55,14 @@ export default function AnalysisTab({ data }: { data: any }) {
       <div className="bg-white rounded-xl p-4 shadow-sm space-y-2">
         <p className="text-sm font-bold text-gray-600">微量栄養素</p>
         {n2?.status === 'ok' ? (
-          <div className="space-y-2">
-            {n2.nutrients.map((nut: any) => (
-              <NutrientBar key={nut.key} name={nut.name} pctDisplay={nut.achievement_pct_display} unit={nut.unit} avg={nut.avg_intake} refValue={nut.reference_value} />
+          <div className="space-y-4">
+            {groupNutrients(n2.nutrients).map((group) => (
+              <section key={group.label} className="space-y-2">
+                <p className="border-b border-gray-100 pb-1 text-xs font-bold text-gray-500">{group.label}</p>
+                {group.nutrients.map((nut: any) => (
+                  <NutrientBar key={nut.key} name={nut.name} pctDisplay={nut.achievement_pct_display} unit={nut.unit} avg={nut.avg_intake} refValue={nut.reference_value} />
+                ))}
+              </section>
             ))}
           </div>
         ) : <Insufficient b={n2} />}

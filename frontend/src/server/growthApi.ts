@@ -1,5 +1,5 @@
-// Direct server-side port of GAS/api_growth.gs.
-// The calculation bodies are intentionally kept synchronous and close to GAS.
+// Server-side growth calculation ported from the legacy backend.
+// The calculation bodies remain synchronous to keep the migrated contract stable.
 // Sheets are loaded once per request by readApi.ts, then these functions operate on that snapshot.
 // @ts-nocheck
 import { createHash } from 'node:crypto';
