@@ -25,6 +25,7 @@ const readActions = [
   ['getTrainingBoard', {}],
   ['getDailyCalorieSummary', {}],
   ['getDashboardAll', {}],
+  ['getDashboardData', {}],
   ['getBodyComposition', {}],
   ['getGoalPlans', {}],
   ['getNutritionAnalysis', {}],

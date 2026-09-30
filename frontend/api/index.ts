@@ -68,8 +68,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? await dispatchMutation(context, userId, action, params)
       : await dispatchRead(context, userId, action, params);
     res.status(statusFor(result)).json(result);
-  } catch {
+  } catch (error) {
     // Deliberately do not return exception details: they may contain provider configuration.
+    const details = error instanceof Error
+      ? { name: error.name, message: error.message, stack: error.stack }
+      : { name: 'UnknownError', message: String(error), stack: undefined };
+    console.error('[api] unexpected server error', {
+      action,
+      range: typeof params.range === 'string' ? params.range : undefined,
+      error: details,
+    });
     res.status(500).json(failure('SERVER_ERROR', 'サーバー処理に失敗しました'));
   }
 }

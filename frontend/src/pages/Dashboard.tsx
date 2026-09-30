@@ -1,10 +1,126 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { callApi } from '../services/api';
 import Loading from '../components/Loading';
 import GrowthGlance from '../components/GrowthGlance';
 import GoalPlanBanner from '../components/GoalPlanBanner';
+import { BarChart, MultiLineChart } from '../components/charts';
 import { getUserId } from '../services/liff';
 import { loadSnapshot, saveSnapshot } from '../services/snapshot';
+
+function LegacyPfcBars({ legacy }: { legacy: any }) {
+  const items = [
+    ['P', legacy.stats.avgProtein, legacy.ideal.protein, 'bg-blue-500'],
+    ['F', legacy.stats.avgFat, legacy.ideal.fat, 'bg-orange-400'],
+    ['C', legacy.stats.avgCarbs, legacy.ideal.carbs, 'bg-emerald-500'],
+  ] as const;
+  const max = Math.max(...items.flatMap((item) => [item[1], item[2]]), 1);
+  return (
+    <div className="space-y-3">
+      {items.map(([label, actual, ideal, color]) => (
+        <div key={label} className="grid grid-cols-[1rem_1fr_3.5rem] items-center gap-2 text-xs">
+          <span className="font-bold text-gray-600">{label}</span>
+          <div className="h-3 rounded bg-gray-100">
+            <div className={`h-3 rounded ${color}`} style={{ width: `${Math.min((actual / max) * 100, 100)}%` }} />
+          </div>
+          <span className="text-right text-gray-500">{actual} / {ideal}g</span>
+        </div>
+      ))}
+      <p className="text-[10px] text-gray-400">実績g / 理想g（P20%・F25%・C55%）</p>
+    </div>
+  );
+}
+
+function LegacyNutrients({ legacy }: { legacy: any }) {
+  const items = [
+    ['食物繊維', legacy.stats.avgFiber, legacy.ideal.fiber, 'g'],
+    ['ビタミン類', legacy.stats.avgVitamins, legacy.ideal.vitamins, '%'],
+    ['亜鉛', legacy.stats.avgZinc, legacy.ideal.zinc, 'mg'],
+    ['マグネシウム', legacy.stats.avgMagnesium, legacy.ideal.magnesium, 'mg'],
+    ['塩分', legacy.stats.avgSodium, legacy.ideal.sodium, 'g'],
+    ['鉄分', legacy.stats.avgIron, legacy.ideal.iron, 'mg'],
+  ] as const;
+  return (
+    <div className="space-y-2">
+      {items.map(([name, actual, ideal, unit]) => {
+        const pct = ideal > 0 ? Math.round(actual / ideal * 100) : 0;
+        return (
+          <div key={name}>
+            <div className="mb-1 flex justify-between text-[10px] text-gray-500"><span>{name}</span><span>{actual}{unit} / {ideal}{unit}</span></div>
+            <div className="h-2 rounded bg-gray-100"><div className={`h-2 rounded ${pct < 100 ? 'bg-amber-400' : 'bg-emerald-500'}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function LegacyDashboard({ legacy }: { legacy: any }) {
+  if (!legacy?.daily?.length) return null;
+  const { stats, ideal, daily, summary } = legacy;
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="rounded-xl bg-white p-4 shadow-sm">
+          <p className="mb-3 text-sm font-bold text-gray-600">PFCバランス（過去7日間平均 vs 理想）</p>
+          <LegacyPfcBars legacy={legacy} />
+        </div>
+        <div className="rounded-xl bg-white p-4 shadow-sm">
+          <p className="mb-3 text-sm font-bold text-gray-600">栄養バランス（過去7日間平均）</p>
+          <LegacyNutrients legacy={legacy} />
+        </div>
+      </div>
+
+      <div className="rounded-xl bg-white p-4 shadow-sm">
+        <p className="mb-2 text-sm font-bold text-gray-600">PFCの推移（過去7日間）</p>
+        <MultiLineChart height={150} series={[
+          { name: 'P', color: '#2563eb', points: daily.map((day: any) => ({ date: day.date, value: day.protein })) },
+          { name: 'F', color: '#f97316', points: daily.map((day: any) => ({ date: day.date, value: day.fat })) },
+          { name: 'C', color: '#10b981', points: daily.map((day: any) => ({ date: day.date, value: day.carbs })) },
+        ]} />
+      </div>
+
+      <div className="rounded-xl bg-white p-4 shadow-sm">
+        <p className="mb-3 text-sm font-bold text-gray-600">今週の栄養サマリー</p>
+        <div className="grid grid-cols-2 gap-3 text-center md:grid-cols-4">
+          <div><p className="text-[10px] text-gray-400">栄養バランススコア</p><p className="text-2xl font-bold">{summary.score}<span className="text-xs text-gray-400"> / 100</span></p></div>
+          <div><p className="text-[10px] text-gray-400">目標達成日数</p><p className="text-2xl font-bold">{summary.successDays}<span className="text-xs text-gray-400"> / 7日</span></p></div>
+          <div><p className="text-[10px] text-gray-400">平均摂取カロリー</p><p className="text-2xl font-bold">{stats.avgCalories.toLocaleString()}</p></div>
+          <div><p className="text-[10px] text-gray-400">目標カロリー</p><p className="text-2xl font-bold">{ideal.calories.toLocaleString()}</p></div>
+        </div>
+      </div>
+
+      <div className="rounded-xl bg-white p-4 shadow-sm">
+        <p className="mb-3 text-sm font-bold text-gray-600">1日あたりの摂取量（過去7日間）</p>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+          {daily.map((day: any) => (
+            <div key={day.date} className="rounded-lg border border-gray-100 p-2 text-center">
+              <p className="text-[10px] font-bold text-gray-500">{day.label}</p>
+              <p className="my-1 text-sm font-bold">{day.calories.toLocaleString()} <span className="text-[10px] font-normal">kcal</span></p>
+              <p className="text-[10px] text-gray-500">P {day.protein}g / F {day.fat}g / C {day.carbs}g</p>
+            </div>
+          ))}
+        </div>
+        <div className="mt-3"><BarChart height={100} points={daily.map((day: any) => ({ date: day.date, value: day.calories }))} /></div>
+      </div>
+
+      <div className="rounded-xl bg-white p-4 shadow-sm">
+        <p className="mb-3 text-sm font-bold text-gray-600">平均して不足している栄養素</p>
+        {summary.deficiencies.length ? (
+          <div className="space-y-2">{summary.deficiencies.map((item: any) => <p key={item.name} className="text-xs text-gray-600">{item.name}：あと{item.diff}（{item.food}）</p>)}</div>
+        ) : <p className="text-xs font-bold text-emerald-600">🎉 現在不足している主要栄養素はありません！</p>}
+      </div>
+
+      {legacy.user.is_premium && (
+        <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between"><p className="text-sm font-bold text-gray-600">AIからのアドバイス</p><span className="rounded bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">プロプラン限定</span></div>
+          <p className="mt-2 text-xs text-gray-600">詳細な栄養分析は栄養管理画面で確認できます。</p>
+          <Link to="/nutrition" className="mt-3 block rounded-xl bg-emerald-50 py-2 text-center text-xs font-bold text-emerald-600">詳細な分析を見る →</Link>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const [loading, setLoading] = useState(true);
@@ -91,6 +207,7 @@ export default function Dashboard() {
         <p className="text-2xl font-bold text-emerald-600">{summary.estimated_exercise_calories} kcal</p>
         <p className="text-xs text-gray-400 mt-1">＊ {summary.exercise_note}</p>
       </div>
+      <LegacyDashboard legacy={dash.legacy} />
     </div>
   );
 }

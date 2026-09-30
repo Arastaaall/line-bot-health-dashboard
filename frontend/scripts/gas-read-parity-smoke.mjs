@@ -118,7 +118,9 @@ function gasResult(action, params) {
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])]));
+    // Vercel's Dashboard response includes the additive legacy-parity payload.
+    // Keep the original GAS contract comparison focused on shared fields.
+    return Object.fromEntries(Object.keys(value).filter((key) => key !== 'legacy').sort().map((key) => [key, canonical(value[key])]));
   }
   return value;
 }

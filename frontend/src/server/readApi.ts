@@ -182,6 +182,98 @@ function buildGlance(logs: SheetRow[], setsByLog: Map<string, SheetRow[]>, meals
   return blocks;
 }
 
+function legacyDashboardData(user: Awaited<ReturnType<typeof userRecord>>, meals: SheetRow[]) {
+  const keys = Array.from({ length: 7 }, (_, index) => dateKeyOf(addDays(new Date(), index - 6)));
+  const byDate = Object.fromEntries(keys.map((date) => [date, {
+    date,
+    label: new Intl.DateTimeFormat('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', weekday: 'short' }).format(new Date(`${date}T00:00:00+09:00`)),
+    calories: 0,
+    protein: 0,
+    fat: 0,
+    carbs: 0,
+  }]));
+  let totalCalories = 0;
+  let totalProtein = 0;
+  let totalFat = 0;
+  let totalCarbs = 0;
+  let totalFiber = 0;
+  let totalVitamins = 0;
+  let totalZinc = 0;
+  let totalMagnesium = 0;
+  let totalSodium = 0;
+  let totalIron = 0;
+
+  meals.forEach((row) => {
+    const date = dateKeyOf(row.timestamp);
+    const day = byDate[date];
+    if (!day) return;
+    const calories = numberValue(row.calories, 0) ?? 0;
+    const protein = numberValue(row.protein, 0) ?? 0;
+    const fat = numberValue(row.fat, 0) ?? 0;
+    const carbs = numberValue(row.carbs, 0) ?? 0;
+    const fiber = row.fiber !== undefined && row.fiber !== '' ? (numberValue(row.fiber, 0) ?? 0) : carbs * 0.08;
+    const vitamins = row.vitamins !== undefined && row.vitamins !== '' ? (numberValue(row.vitamins, 0) ?? 0) : 12;
+    const zinc = row.zinc !== undefined && row.zinc !== '' ? (numberValue(row.zinc, 0) ?? 0) : protein * 0.08;
+    const magnesium = row.magnesium !== undefined && row.magnesium !== '' ? (numberValue(row.magnesium, 0) ?? 0) : protein * 2.5;
+    const sodium = row.sodium !== undefined && row.sodium !== '' ? (numberValue(row.sodium, 0) ?? 0) : 7;
+    const iron = row.iron !== undefined && row.iron !== '' ? (numberValue(row.iron, 0) ?? 0) : 0.9;
+    day.calories += calories;
+    day.protein += protein;
+    day.fat += fat;
+    day.carbs += carbs;
+    totalCalories += calories;
+    totalProtein += protein;
+    totalFat += fat;
+    totalCarbs += carbs;
+    totalFiber += fiber;
+    totalVitamins += vitamins;
+    totalZinc += zinc;
+    totalMagnesium += magnesium;
+    totalSodium += sodium;
+    totalIron += iron;
+  });
+
+  const targetCalories = user.targetCalories || 2000;
+  const ideal = {
+    calories: targetCalories,
+    protein: Math.round((targetCalories * 0.20) / 4),
+    fat: Math.round((targetCalories * 0.25) / 9),
+    carbs: Math.round((targetCalories * 0.55) / 4),
+    fiber: 20,
+    vitamins: 100,
+    zinc: 10,
+    magnesium: 320,
+    sodium: 8,
+    iron: 7.5,
+  };
+  const stats = {
+    avgCalories: Math.round(totalCalories / 7),
+    avgProtein: Math.round(totalProtein / 7),
+    avgFat: Math.round(totalFat / 7),
+    avgCarbs: Math.round(totalCarbs / 7),
+    avgFiber: Math.round(totalFiber / 7),
+    avgVitamins: Math.round((totalVitamins / 7) * 7.1),
+    avgZinc: Math.round((totalZinc / 7) * 10) / 10,
+    avgMagnesium: Math.round(totalMagnesium / 7),
+    avgSodium: Math.round((totalSodium / 7) * 10) / 10,
+    avgIron: Math.round((totalIron / 7) * 10) / 10,
+  };
+  const daily = keys.map((date) => byDate[date]);
+  const successDays = daily.filter((day) => day.calories >= ideal.calories * 0.85 && day.calories <= ideal.calories * 1.15).length;
+  const deficiencies = [];
+  if (stats.avgFat < ideal.fat) deficiencies.push({ name: '脂質 (Fat)', diff: `${ideal.fat - stats.avgFat}g / 日`, food: 'アボカド、ナッツ類', color: 'text-amber-500' });
+  if (stats.avgFiber < ideal.fiber) deficiencies.push({ name: '食物繊維 (Fiber)', diff: `${ideal.fiber - stats.avgFiber}g / 日`, food: 'きのこ類、野菜類', color: 'text-emerald-500' });
+  if (stats.avgIron < ideal.iron) deficiencies.push({ name: '鉄分 (Iron)', diff: `${(ideal.iron - stats.avgIron).toFixed(1)}mg / 日`, food: 'ほうれん草、赤身肉', color: 'text-rose-500' });
+
+  return {
+    user: { name: user.name, target_calories: targetCalories, is_premium: user.isPremium },
+    ideal,
+    stats,
+    daily,
+    summary: { score: Math.min(Math.round(80 + successDays * 3), 98), successDays, deficiencies },
+  };
+}
+
 async function getDashboardAll(context: RequestContext, userId: string, params: Record<string, unknown>): Promise<ApiResult<unknown>> {
   const [user, logs, meals] = await Promise.all([
     userRecord(context, userId),
@@ -197,7 +289,8 @@ async function getDashboardAll(context: RequestContext, userId: string, params: 
   if (!summaryResult.ok) return summaryResult;
   const goalBanner = goalResult.ok ? buildGoalBanner(goalResult.data) : { show: false, message: '' };
   const glance = buildGlance(logs, setsByLog, meals);
-  return ok({ summary: summaryResult.data, dashboard: { user: { name: user.name, isPremium: user.isPremium }, glance }, glance, goal_banner: goalBanner });
+  const legacy = legacyDashboardData(user, meals);
+  return ok({ summary: summaryResult.data, dashboard: { user: { name: user.name, isPremium: user.isPremium }, glance, legacy }, glance, goal_banner: goalBanner, legacy });
 }
 
 function buildGoalBanner(data: unknown): { show: boolean; message: string } {
@@ -466,10 +559,11 @@ async function getBodyComposition(context: RequestContext, userId: string, param
 }
 
 const GROWTH_SHEETS = ['users', 'Training_Logs', 'Training_Sets', 'Body_Composition', 'logs', 'Training_Master', 'Training_Menus', 'Goal_Plans'];
+const GROWTH_READ_OPTIONS = { dateTimeRenderOption: 'SERIAL_NUMBER' } as const;
 
 async function growthDispatch(context: RequestContext, userId: string, action: string, params: Record<string, unknown>): Promise<ApiResult<unknown>> {
-  await batchSheetValues(context, GROWTH_SHEETS);
-  const entries = await Promise.all(GROWTH_SHEETS.map(async (sheetName) => [sheetName, await getRows(context, sheetName)] as const));
+  await batchSheetValues(context, GROWTH_SHEETS, GROWTH_READ_OPTIONS);
+  const entries = await Promise.all(GROWTH_SHEETS.map(async (sheetName) => [sheetName, await getRows(context, sheetName, undefined, GROWTH_READ_OPTIONS)] as const));
   const datasets = Object.fromEntries(entries);
   return growthAction(datasets, userId, action, params) as ApiResult<unknown>;
 }
@@ -494,6 +588,10 @@ export async function dispatchRead(context: RequestContext, userId: string, acti
     case 'getTrainingBoard': return getTrainingBoard(context, userId);
     case 'getDailyCalorieSummary': return getDailyCalorieSummary(context, userId, params);
     case 'getDashboardAll': return getDashboardAll(context, userId, params);
+    case 'getDashboardData': {
+      const dashboard = await getDashboardAll(context, userId, params);
+      return dashboard.ok ? ok((dashboard.data as { legacy: unknown }).legacy) : dashboard;
+    }
     case 'getBodyComposition': return getBodyComposition(context, userId, params);
     case 'getGoalPlans': return getGoalPlans(context, userId);
     case 'getNutritionAnalysis': return getNutritionAnalysis(context, userId, params);
@@ -512,7 +610,7 @@ export async function dispatchRead(context: RequestContext, userId: string, acti
 
 export const VERCEL_READ_ACTIONS = new Set([
   'getTrainingMaster', 'getTrainingMenus', 'getTrainingLogs', 'getTrainingLogDetail',
-  'getTrainingFormInit', 'getTrainingBoard', 'getDailyCalorieSummary', 'getDashboardAll',
+  'getTrainingFormInit', 'getTrainingBoard', 'getDailyCalorieSummary', 'getDashboardAll', 'getDashboardData',
   'getBodyComposition', 'getGoalPlans', 'getNutritionAnalysis', 'getFoodHistory', 'getFoodDay',
   'getGrowthSummary', 'getGrowthAll', 'getTrainingAnalysis', 'getMenuTrajectory', 'getMealAnalysis', 'getBodyAnalysis',
 ]);

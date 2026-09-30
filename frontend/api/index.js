@@ -181,8 +181,8 @@ async function batchSheetValues(context, sheetNames, options = {}) {
   }));
   return result;
 }
-async function getRows(context, sheetName, filter) {
-  const values = await sheetValues(context, sheetName);
+async function getRows(context, sheetName, filter, options = {}) {
+  const values = await sheetValues(context, sheetName, options);
   if (values.length < 2) return [];
   const header = values[0].map((value) => String(value ?? ""));
   const rows = [];
@@ -342,6 +342,8 @@ import { randomUUID } from "node:crypto";
 
 // src/server/date.ts
 var JST = "Asia/Tokyo";
+var GOOGLE_SHEETS_EPOCH_UTC_MS = Date.UTC(1899, 11, 30);
+var JST_OFFSET_MS = 9 * 60 * 60 * 1e3;
 function parts(date) {
   const values = new Intl.DateTimeFormat("en-US", {
     timeZone: JST,
@@ -359,7 +361,7 @@ function parts(date) {
 function asDate(value) {
   if (value instanceof Date) return value;
   if (typeof value === "number" && Number.isFinite(value)) {
-    return new Date(Date.UTC(1899, 11, 30) + value * 864e5);
+    return new Date(GOOGLE_SHEETS_EPOCH_UTC_MS + value * 864e5 - JST_OFFSET_MS);
   }
   const source = String(value ?? "").trim();
   if (!source) return new Date(Number.NaN);
@@ -1152,8 +1154,34 @@ async function dispatchMutation(context, userId, action, params) {
 // src/server/growthApi.ts
 import { createHash as createHash2 } from "node:crypto";
 var datasets = {};
+var GROWTH_DATE_FIELDS = {
+  users: ["updated_at"],
+  Training_Logs: ["training_date", "created_at"],
+  Training_Menus: ["created_at", "updated_at"],
+  Body_Composition: ["measured_at", "created_at"],
+  logs: ["timestamp"],
+  Goal_Plans: ["start_date", "planned_end_date"]
+};
+function normalizeGrowthDate(value) {
+  if (value === "" || value === null || value === void 0) return value;
+  const date = asDate(value);
+  return Number.isNaN(date.getTime()) ? value : formatFoodTimestamp(date);
+}
+function normalizeGrowthDatasets(input) {
+  return Object.fromEntries(Object.entries(input).map(([sheetName, rows]) => {
+    const fields = GROWTH_DATE_FIELDS[sheetName] || [];
+    return [sheetName, rows.map((row) => {
+      if (!fields.length) return row;
+      const normalized = { ...row };
+      fields.forEach((field) => {
+        if (field in normalized) normalized[field] = normalizeGrowthDate(normalized[field]);
+      });
+      return normalized;
+    })];
+  }));
+}
 function setGrowthDatasets(input) {
-  datasets = input;
+  datasets = normalizeGrowthDatasets(input);
 }
 function getRows2(sheetName, filterFn) {
   const rows = datasets[sheetName] || [];
@@ -1177,7 +1205,9 @@ function todayKey_() {
   return todayKey();
 }
 function jstHour_(value) {
-  const parts2 = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Tokyo", hour: "2-digit", hour12: false }).formatToParts(new Date(value));
+  const date = asDate(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts2 = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Tokyo", hour: "2-digit", hour12: false }).formatToParts(date);
   return Number(parts2.find((part) => part.type === "hour")?.value || 0);
 }
 function perfMark_(_label) {
@@ -1294,7 +1324,7 @@ function buildGrowthSummary_(userId, range, isPremium) {
     return dateKeyOf_(d);
   }
   const inRange = function(k) {
-    return (!from || k >= from) && k <= to;
+    return !!k && (!from || k >= from) && k <= to;
   };
   const tLogs = getRows2("Training_Logs", function(r) {
     return String(r["user_id"]) === String(userId) && inRange(dateKeyOf_(new Date(r["training_date"])));
@@ -1519,7 +1549,7 @@ function gBounds_(range) {
   return { from, to };
 }
 function gIn_(k, b) {
-  return (!b.from || k >= b.from) && k <= b.to;
+  return !!k && (!b.from || k >= b.from) && k <= b.to;
 }
 function gBucket_(k, weekly) {
   if (!weekly) return k;
@@ -2318,8 +2348,9 @@ function buildMealAnalysis_(userId, range) {
     mLogs.forEach(function(r) {
       const k = dateKeyOf_(new Date(r["timestamp"]));
       if (!gIn_(k, b)) return;
-      any = true;
       const h = jstHour_(r["timestamp"]);
+      if (h === null) return;
+      any = true;
       if (h >= 5 && h <= 9) c.morning += 1;
       else if (h >= 10 && h <= 16) c.noon += 1;
       else if (h >= 17 && h <= 20) c.evening += 1;
@@ -3015,6 +3046,94 @@ function buildGlance(logs, setsByLog, meals) {
   }
   return blocks;
 }
+function legacyDashboardData(user, meals) {
+  const keys = Array.from({ length: 7 }, (_, index) => dateKeyOf(addDays(/* @__PURE__ */ new Date(), index - 6)));
+  const byDate = Object.fromEntries(keys.map((date) => [date, {
+    date,
+    label: new Intl.DateTimeFormat("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", weekday: "short" }).format(/* @__PURE__ */ new Date(`${date}T00:00:00+09:00`)),
+    calories: 0,
+    protein: 0,
+    fat: 0,
+    carbs: 0
+  }]));
+  let totalCalories = 0;
+  let totalProtein = 0;
+  let totalFat = 0;
+  let totalCarbs = 0;
+  let totalFiber = 0;
+  let totalVitamins = 0;
+  let totalZinc = 0;
+  let totalMagnesium = 0;
+  let totalSodium = 0;
+  let totalIron = 0;
+  meals.forEach((row) => {
+    const date = dateKeyOf(row.timestamp);
+    const day = byDate[date];
+    if (!day) return;
+    const calories = numberValue2(row.calories, 0) ?? 0;
+    const protein = numberValue2(row.protein, 0) ?? 0;
+    const fat = numberValue2(row.fat, 0) ?? 0;
+    const carbs = numberValue2(row.carbs, 0) ?? 0;
+    const fiber = row.fiber !== void 0 && row.fiber !== "" ? numberValue2(row.fiber, 0) ?? 0 : carbs * 0.08;
+    const vitamins = row.vitamins !== void 0 && row.vitamins !== "" ? numberValue2(row.vitamins, 0) ?? 0 : 12;
+    const zinc = row.zinc !== void 0 && row.zinc !== "" ? numberValue2(row.zinc, 0) ?? 0 : protein * 0.08;
+    const magnesium = row.magnesium !== void 0 && row.magnesium !== "" ? numberValue2(row.magnesium, 0) ?? 0 : protein * 2.5;
+    const sodium = row.sodium !== void 0 && row.sodium !== "" ? numberValue2(row.sodium, 0) ?? 0 : 7;
+    const iron = row.iron !== void 0 && row.iron !== "" ? numberValue2(row.iron, 0) ?? 0 : 0.9;
+    day.calories += calories;
+    day.protein += protein;
+    day.fat += fat;
+    day.carbs += carbs;
+    totalCalories += calories;
+    totalProtein += protein;
+    totalFat += fat;
+    totalCarbs += carbs;
+    totalFiber += fiber;
+    totalVitamins += vitamins;
+    totalZinc += zinc;
+    totalMagnesium += magnesium;
+    totalSodium += sodium;
+    totalIron += iron;
+  });
+  const targetCalories = user.targetCalories || 2e3;
+  const ideal = {
+    calories: targetCalories,
+    protein: Math.round(targetCalories * 0.2 / 4),
+    fat: Math.round(targetCalories * 0.25 / 9),
+    carbs: Math.round(targetCalories * 0.55 / 4),
+    fiber: 20,
+    vitamins: 100,
+    zinc: 10,
+    magnesium: 320,
+    sodium: 8,
+    iron: 7.5
+  };
+  const stats = {
+    avgCalories: Math.round(totalCalories / 7),
+    avgProtein: Math.round(totalProtein / 7),
+    avgFat: Math.round(totalFat / 7),
+    avgCarbs: Math.round(totalCarbs / 7),
+    avgFiber: Math.round(totalFiber / 7),
+    avgVitamins: Math.round(totalVitamins / 7 * 7.1),
+    avgZinc: Math.round(totalZinc / 7 * 10) / 10,
+    avgMagnesium: Math.round(totalMagnesium / 7),
+    avgSodium: Math.round(totalSodium / 7 * 10) / 10,
+    avgIron: Math.round(totalIron / 7 * 10) / 10
+  };
+  const daily = keys.map((date) => byDate[date]);
+  const successDays = daily.filter((day) => day.calories >= ideal.calories * 0.85 && day.calories <= ideal.calories * 1.15).length;
+  const deficiencies = [];
+  if (stats.avgFat < ideal.fat) deficiencies.push({ name: "\u8102\u8CEA (Fat)", diff: `${ideal.fat - stats.avgFat}g / \u65E5`, food: "\u30A2\u30DC\u30AB\u30C9\u3001\u30CA\u30C3\u30C4\u985E", color: "text-amber-500" });
+  if (stats.avgFiber < ideal.fiber) deficiencies.push({ name: "\u98DF\u7269\u7E4A\u7DAD (Fiber)", diff: `${ideal.fiber - stats.avgFiber}g / \u65E5`, food: "\u304D\u306E\u3053\u985E\u3001\u91CE\u83DC\u985E", color: "text-emerald-500" });
+  if (stats.avgIron < ideal.iron) deficiencies.push({ name: "\u9244\u5206 (Iron)", diff: `${(ideal.iron - stats.avgIron).toFixed(1)}mg / \u65E5`, food: "\u307B\u3046\u308C\u3093\u8349\u3001\u8D64\u8EAB\u8089", color: "text-rose-500" });
+  return {
+    user: { name: user.name, target_calories: targetCalories, is_premium: user.isPremium },
+    ideal,
+    stats,
+    daily,
+    summary: { score: Math.min(Math.round(80 + successDays * 3), 98), successDays, deficiencies }
+  };
+}
 async function getDashboardAll(context, userId, params) {
   const [user, logs, meals] = await Promise.all([
     userRecord2(context, userId),
@@ -3030,7 +3149,8 @@ async function getDashboardAll(context, userId, params) {
   if (!summaryResult.ok) return summaryResult;
   const goalBanner = goalResult.ok ? buildGoalBanner(goalResult.data) : { show: false, message: "" };
   const glance = buildGlance(logs, setsByLog, meals);
-  return ok2({ summary: summaryResult.data, dashboard: { user: { name: user.name, isPremium: user.isPremium }, glance }, glance, goal_banner: goalBanner });
+  const legacy = legacyDashboardData(user, meals);
+  return ok2({ summary: summaryResult.data, dashboard: { user: { name: user.name, isPremium: user.isPremium }, glance, legacy }, glance, goal_banner: goalBanner, legacy });
 }
 function buildGoalBanner(data) {
   const active = data?.active_plan;
@@ -3312,9 +3432,10 @@ async function getBodyComposition(context, userId, params) {
   return ok2({ weight_trend: trend, detail_records: details, latest_weight_kg: latest, bmi, plan_limits: { weight_days: user.isPremium ? null : 7, detail_records: 2 } });
 }
 var GROWTH_SHEETS = ["users", "Training_Logs", "Training_Sets", "Body_Composition", "logs", "Training_Master", "Training_Menus", "Goal_Plans"];
+var GROWTH_READ_OPTIONS = { dateTimeRenderOption: "SERIAL_NUMBER" };
 async function growthDispatch(context, userId, action, params) {
-  await batchSheetValues(context, GROWTH_SHEETS);
-  const entries = await Promise.all(GROWTH_SHEETS.map(async (sheetName) => [sheetName, await getRows(context, sheetName)]));
+  await batchSheetValues(context, GROWTH_SHEETS, GROWTH_READ_OPTIONS);
+  const entries = await Promise.all(GROWTH_SHEETS.map(async (sheetName) => [sheetName, await getRows(context, sheetName, void 0, GROWTH_READ_OPTIONS)]));
   const datasets2 = Object.fromEntries(entries);
   return growthAction(datasets2, userId, action, params);
 }
@@ -3344,6 +3465,10 @@ async function dispatchRead(context, userId, action, params) {
       return getDailyCalorieSummary(context, userId, params);
     case "getDashboardAll":
       return getDashboardAll(context, userId, params);
+    case "getDashboardData": {
+      const dashboard = await getDashboardAll(context, userId, params);
+      return dashboard.ok ? ok2(dashboard.data.legacy) : dashboard;
+    }
     case "getBodyComposition":
       return getBodyComposition(context, userId, params);
     case "getGoalPlans":
@@ -3433,7 +3558,13 @@ async function handler(req, res) {
     const context = createRequestContext();
     const result = isMutationAction(action) ? await dispatchMutation(context, userId, action, params) : await dispatchRead(context, userId, action, params);
     res.status(statusFor(result)).json(result);
-  } catch {
+  } catch (error) {
+    const details = error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : { name: "UnknownError", message: String(error), stack: void 0 };
+    console.error("[api] unexpected server error", {
+      action,
+      range: typeof params.range === "string" ? params.range : void 0,
+      error: details
+    });
     res.status(500).json(failure("SERVER_ERROR", "\u30B5\u30FC\u30D0\u30FC\u51E6\u7406\u306B\u5931\u6557\u3057\u307E\u3057\u305F"));
   }
 }

@@ -1,4 +1,6 @@
 const JST = 'Asia/Tokyo';
+const GOOGLE_SHEETS_EPOCH_UTC_MS = Date.UTC(1899, 11, 30);
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 function parts(date: Date) {
   const values = new Intl.DateTimeFormat('en-US', {
@@ -18,8 +20,10 @@ function parts(date: Date) {
 export function asDate(value: unknown): Date {
   if (value instanceof Date) return value;
   if (typeof value === 'number' && Number.isFinite(value)) {
-    // Google Sheets serial dates use 1899-12-30 as their epoch.
-    return new Date(Date.UTC(1899, 11, 30) + value * 86400000);
+    // Google Sheets serial dates are spreadsheet-local wall-clock values.
+    // The workbook is configured for JST, so interpret the serial's clock
+    // value in JST before converting it to a JavaScript instant.
+    return new Date(GOOGLE_SHEETS_EPOCH_UTC_MS + value * 86400000 - JST_OFFSET_MS);
   }
   const source = String(value ?? '').trim();
   if (!source) return new Date(Number.NaN);

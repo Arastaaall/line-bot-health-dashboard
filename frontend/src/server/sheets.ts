@@ -184,8 +184,8 @@ export async function batchSheetValues(context: RequestContext, sheetNames: stri
   return result;
 }
 
-export async function getRows(context: RequestContext, sheetName: string, filter?: (row: SheetRow) => boolean): Promise<SheetRow[]> {
-  const values = await sheetValues(context, sheetName);
+export async function getRows(context: RequestContext, sheetName: string, filter?: (row: SheetRow) => boolean, options: SheetReadOptions = {}): Promise<SheetRow[]> {
+  const values = await sheetValues(context, sheetName, options);
   if (values.length < 2) return [];
   const header = values[0].map((value) => String(value ?? ''));
   const rows: SheetRow[] = [];

@@ -3,12 +3,39 @@
 // Sheets are loaded once per request by readApi.ts, then these functions operate on that snapshot.
 // @ts-nocheck
 import { createHash } from 'node:crypto';
-import { dateKeyOf as jstDateKeyOf, todayKey as jstTodayKey } from './date.ts';
+import { asDate, dateKeyOf as jstDateKeyOf, formatFoodTimestamp, todayKey as jstTodayKey } from './date.ts';
 
 type Row = Record<string, any>;
 let datasets: Record<string, Row[]> = {};
 
-function setGrowthDatasets(input: Record<string, Row[]>) { datasets = input; }
+const GROWTH_DATE_FIELDS: Record<string, string[]> = {
+  users: ['updated_at'],
+  Training_Logs: ['training_date', 'created_at'],
+  Training_Menus: ['created_at', 'updated_at'],
+  Body_Composition: ['measured_at', 'created_at'],
+  logs: ['timestamp'],
+  Goal_Plans: ['start_date', 'planned_end_date'],
+};
+
+function normalizeGrowthDate(value: any) {
+  if (value === '' || value === null || value === undefined) return value;
+  const date = asDate(value);
+  return Number.isNaN(date.getTime()) ? value : formatFoodTimestamp(date);
+}
+
+function normalizeGrowthDatasets(input: Record<string, Row[]>) {
+  return Object.fromEntries(Object.entries(input).map(([sheetName, rows]) => {
+    const fields = GROWTH_DATE_FIELDS[sheetName] || [];
+    return [sheetName, rows.map((row) => {
+      if (!fields.length) return row;
+      const normalized = { ...row };
+      fields.forEach((field) => { if (field in normalized) normalized[field] = normalizeGrowthDate(normalized[field]); });
+      return normalized;
+    })];
+  }));
+}
+
+function setGrowthDatasets(input: Record<string, Row[]>) { datasets = normalizeGrowthDatasets(input); }
 function getRows(sheetName: string, filterFn?: (row: Row) => boolean): Row[] {
   const rows = datasets[sheetName] || [];
   return filterFn ? rows.filter(filterFn) : rows.slice();
@@ -27,7 +54,9 @@ function toBool_(value: any) {
 function dateKeyOf_(value: any) { return jstDateKeyOf(value); }
 function todayKey_() { return jstTodayKey(); }
 function jstHour_(value: any) {
-  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Tokyo', hour: '2-digit', hour12: false }).formatToParts(new Date(value));
+  const date = asDate(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Tokyo', hour: '2-digit', hour12: false }).formatToParts(date);
   return Number(parts.find((part) => part.type === 'hour')?.value || 0);
 }
 function perfMark_(_label: string) {}
@@ -140,7 +169,7 @@ function buildGrowthSummary_(userId, range, isPremium) {
     d.setDate(d.getDate() - (day === 0 ? 6 : day - 1)); // 月曜へ
     return dateKeyOf_(d);
   }
-  const inRange = function (k) { return (!from || k >= from) && k <= to; };
+  const inRange = function (k) { return !!k && (!from || k >= from) && k <= to; };
 
   // ---- 一括読み込み（読取のみ） ----
   const tLogs = getRows('Training_Logs', function (r) {
@@ -361,7 +390,7 @@ function gBounds_(range) {
   else if (range === '1y') { const d = new Date(); d.setDate(d.getDate() - 364); from = dateKeyOf_(d); }
   return { from: from, to: to };
 }
-function gIn_(k, b) { return (!b.from || k >= b.from) && k <= b.to; }
+function gIn_(k, b) { return !!k && (!b.from || k >= b.from) && k <= b.to; }
 function gBucket_(k, weekly) {
   if (!weekly) return k;
   const d = new Date(k + 'T00:00:00');
@@ -985,8 +1014,9 @@ function buildMealAnalysis_(userId, range) {
     mLogs.forEach(function (r) {
       const k = dateKeyOf_(new Date(r['timestamp']));
       if (!gIn_(k, b)) return;
-      any = true;
       const h = jstHour_(r['timestamp']);
+      if (h === null) return;
+      any = true;
       if (h >= 5 && h <= 9) c.morning += 1;
       else if (h >= 10 && h <= 16) c.noon += 1;
       else if (h >= 17 && h <= 20) c.evening += 1;
