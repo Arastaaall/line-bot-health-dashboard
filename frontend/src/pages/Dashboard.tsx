@@ -4,70 +4,30 @@ import { callApi } from '../services/api';
 import Loading from '../components/Loading';
 import GrowthGlance from '../components/GrowthGlance';
 import GoalPlanBanner from '../components/GoalPlanBanner';
-import { BarChart, MultiLineChart } from '../components/charts';
+import { BarChart, MultiLineChart, PfcBalanceChart, RadarChart } from '../components/charts';
+import { LEGACY_RADAR_LABELS, legacyRadarValues } from '../components/legacyChartData';
 import { getUserId } from '../services/liff';
 import { loadSnapshot, saveSnapshot } from '../services/snapshot';
-
-function LegacyPfcBars({ legacy }: { legacy: any }) {
-  const items = [
-    ['P', legacy.stats.avgProtein, legacy.ideal.protein, 'bg-blue-500'],
-    ['F', legacy.stats.avgFat, legacy.ideal.fat, 'bg-orange-400'],
-    ['C', legacy.stats.avgCarbs, legacy.ideal.carbs, 'bg-emerald-500'],
-  ] as const;
-  const max = Math.max(...items.flatMap((item) => [item[1], item[2]]), 1);
-  return (
-    <div className="space-y-3">
-      {items.map(([label, actual, ideal, color]) => (
-        <div key={label} className="grid grid-cols-[1rem_1fr_3.5rem] items-center gap-2 text-xs">
-          <span className="font-bold text-gray-600">{label}</span>
-          <div className="h-3 rounded bg-gray-100">
-            <div className={`h-3 rounded ${color}`} style={{ width: `${Math.min((actual / max) * 100, 100)}%` }} />
-          </div>
-          <span className="text-right text-gray-500">{actual} / {ideal}g</span>
-        </div>
-      ))}
-      <p className="text-[10px] text-gray-400">実績g / 理想g（P20%・F25%・C55%）</p>
-    </div>
-  );
-}
-
-function LegacyNutrients({ legacy }: { legacy: any }) {
-  const items = [
-    ['食物繊維', legacy.stats.avgFiber, legacy.ideal.fiber, 'g'],
-    ['ビタミン類', legacy.stats.avgVitamins, legacy.ideal.vitamins, '%'],
-    ['亜鉛', legacy.stats.avgZinc, legacy.ideal.zinc, 'mg'],
-    ['マグネシウム', legacy.stats.avgMagnesium, legacy.ideal.magnesium, 'mg'],
-    ['塩分', legacy.stats.avgSodium, legacy.ideal.sodium, 'g'],
-    ['鉄分', legacy.stats.avgIron, legacy.ideal.iron, 'mg'],
-  ] as const;
-  return (
-    <div className="space-y-2">
-      {items.map(([name, actual, ideal, unit]) => {
-        const pct = ideal > 0 ? Math.round(actual / ideal * 100) : 0;
-        return (
-          <div key={name}>
-            <div className="mb-1 flex justify-between text-[10px] text-gray-500"><span>{name}</span><span>{actual}{unit} / {ideal}{unit}</span></div>
-            <div className="h-2 rounded bg-gray-100"><div className={`h-2 rounded ${pct < 100 ? 'bg-amber-400' : 'bg-emerald-500'}`} style={{ width: `${Math.min(pct, 100)}%` }} /></div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 function LegacyDashboard({ legacy }: { legacy: any }) {
   if (!legacy?.daily?.length) return null;
   const { stats, ideal, daily, summary } = legacy;
+  const pfc = [
+    { label: 'P', name: 'たんぱく質', value: stats.avgProtein },
+    { label: 'F', name: '脂質', value: stats.avgFat },
+    { label: 'C', name: '炭水化物', value: stats.avgCarbs },
+  ];
+  const radarValues = legacyRadarValues(stats, ideal);
   return (
     <div className="space-y-4">
       <div className="grid gap-4 md:grid-cols-2">
         <div className="rounded-xl bg-white p-4 shadow-sm">
           <p className="mb-3 text-sm font-bold text-gray-600">PFCバランス（過去7日間平均 vs 理想）</p>
-          <LegacyPfcBars legacy={legacy} />
+          <PfcBalanceChart actual={pfc} ideal={[ideal.protein, ideal.fat, ideal.carbs]} />
         </div>
         <div className="rounded-xl bg-white p-4 shadow-sm">
           <p className="mb-3 text-sm font-bold text-gray-600">栄養バランス（過去7日間平均）</p>
-          <LegacyNutrients legacy={legacy} />
+          <RadarChart labels={[...LEGACY_RADAR_LABELS]} values={radarValues} />
         </div>
       </div>
 

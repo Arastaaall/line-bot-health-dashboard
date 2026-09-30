@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { dateKeyOf, formatFoodTimestamp } from '../src/server/date.ts';
 import { dispatchRead } from '../src/server/readApi.ts';
+import { LEGACY_RADAR_LABELS, legacyRadarValues } from '../src/components/legacyChartData.ts';
 
 const userId = 'date-smoke-user';
 const epoch = Date.UTC(1899, 11, 30);
@@ -80,4 +81,18 @@ assert.equal(dashboard.data.legacy.daily.length, 7);
 assert.equal(dashboard.data.legacy.ideal.calories, 2200);
 assert.equal(dashboard.data.legacy.daily.some((day) => day.date === '2026-07-21'), false);
 
-console.log(`date-regression passed: serial=${mealSerial}, growth_cases=${checked}, dashboard_legacy=ok`);
+const radarValues = legacyRadarValues(dashboard.data.legacy.stats, dashboard.data.legacy.ideal);
+assert.deepEqual([...LEGACY_RADAR_LABELS], ['たんぱく質', '脂質', '炭水化物', '食物繊維', 'ビタミン類', '亜鉛', 'マグネシウム', '塩分(ナトリウム)']);
+assert.deepEqual(radarValues, [
+  Math.round(dashboard.data.legacy.stats.avgProtein / dashboard.data.legacy.ideal.protein * 100),
+  Math.round(dashboard.data.legacy.stats.avgFat / dashboard.data.legacy.ideal.fat * 100),
+  Math.round(dashboard.data.legacy.stats.avgCarbs / dashboard.data.legacy.ideal.carbs * 100),
+  Math.round(dashboard.data.legacy.stats.avgFiber / dashboard.data.legacy.ideal.fiber * 100),
+  dashboard.data.legacy.stats.avgVitamins,
+  Math.round(dashboard.data.legacy.stats.avgZinc / dashboard.data.legacy.ideal.zinc * 100),
+  Math.round(dashboard.data.legacy.stats.avgMagnesium / dashboard.data.legacy.ideal.magnesium * 100),
+  Math.round(dashboard.data.legacy.stats.avgSodium / dashboard.data.legacy.ideal.sodium * 100),
+]);
+assert.deepEqual(legacyRadarValues({ avgFiber: 0, avgVitamins: 0, avgZinc: 0, avgMagnesium: 0, avgSodium: 0 }, dashboard.data.legacy.ideal).slice(3), [0, 0, 0, 0, 0]);
+
+console.log(`date-regression passed: serial=${mealSerial}, growth_cases=${checked}, dashboard_legacy=ok, radar_parity=ok`);

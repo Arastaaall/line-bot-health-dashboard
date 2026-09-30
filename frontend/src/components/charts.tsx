@@ -28,6 +28,11 @@ function fmtVal(v: number) {
   return Math.abs(v - r) < 0.05 ? String(r) : v.toFixed(1);
 }
 
+function axisTicks(count: number) {
+  const withWeekday = count <= 5;
+  return { withWeekday, indices: tickIndices(count, withWeekday ? count : 5) };
+}
+
 function yTicks(min: number, max: number, count = 4) {
   const out: number[] = [];
   for (let i = 0; i <= count; i++) out.push(min + ((max - min) * i) / count);
@@ -69,8 +74,7 @@ export function LineChart({ points, height = 120, color = '#2563eb' }: {
   });
   if (cur.length) segments.push(cur.join(' '));
 
-  const withWeekday = points.length <= 8;
-  const ticksX = tickIndices(points.length, withWeekday ? points.length : 5);
+  const { withWeekday, indices: ticksX } = axisTicks(points.length);
   const last = points.length - 1;
 
   return (
@@ -111,8 +115,7 @@ export function BarChart({ points, height = 120 }: {
   const plotH = height - padT - bottom;
   const step = plotW / points.length;
   const bw = Math.max(step - 2, 1);
-  const withWeekday = points.length <= 8;
-  const ticksX = tickIndices(points.length, withWeekday ? points.length : 5);
+  const { withWeekday, indices: ticksX } = axisTicks(points.length);
   const last = points.length - 1;
 
   return (
@@ -161,8 +164,7 @@ export function BarLineChart({ bars, line, height = 140 }: {
   const YL = (v: number) => padT + (1 - v / maxL) * plotH;
   const linePts = bars.map((b, i) => ({ i, v: lineByDate[b.date] })).filter((p) => p.v !== undefined);
   const poly = linePts.map((p) => `${X(p.i)},${YL(p.v)}`).join(' ');
-  const withWeekday = bars.length <= 8;
-  const ticksX = tickIndices(bars.length, withWeekday ? bars.length : 5);
+  const { withWeekday, indices: ticksX } = axisTicks(bars.length);
   const last = bars.length - 1;
 
   return (
@@ -209,7 +211,7 @@ export function MultiLineChart({ series, height = 120, unit = '' }: {
   const span = max - min || 1;
   const x = (d: string) => padX + (dates.indexOf(d) / Math.max(dates.length - 1, 1)) * (w - padX * 2);
   const y = (v: number) => padTop + (1 - (v - min) / span) * plotH;
-  const ticks = tickIndices(dates.length, dates.length <= 8 ? dates.length : 5);
+  const { withWeekday, indices: ticks } = axisTicks(dates.length);
   const last = dates.length - 1;
   return (
     <div>
@@ -221,7 +223,7 @@ export function MultiLineChart({ series, height = 120, unit = '' }: {
         {ticks.map((i) => (
           <text key={i} x={x(dates[i])} y={height - 3} fontSize="8" fill="#9ca3af"
             textAnchor={i === 0 ? 'start' : i === last ? 'end' : 'middle'}>
-            {fmtTick(dates[i], dates.length <= 8)}
+            {fmtTick(dates[i], withWeekday)}
           </text>
         ))}
       </svg>
@@ -249,7 +251,7 @@ export function ComboChart({ bars, line, height = 140, barLabel = '摂取', line
   const bw = Math.max(step - 2, 1);
   const x = (i: number) => padX + i * step + bw / 2;
   const yLine = (v: number) => padTop + (1 - v / lineMax) * plotH;
-  const ticks = tickIndices(dates.length, dates.length <= 8 ? dates.length : 5);
+  const { withWeekday, indices: ticks } = axisTicks(dates.length);
   const last = dates.length - 1;
   return (
     <div>
@@ -263,13 +265,115 @@ export function ComboChart({ bars, line, height = 140, barLabel = '摂取', line
         {ticks.map((i) => (
           <text key={i} x={x(i)} y={height - 3} fontSize="8" fill="#9ca3af"
             textAnchor={i === 0 ? 'start' : i === last ? 'end' : 'middle'}>
-            {fmtTick(dates[i], dates.length <= 8)}
+            {fmtTick(dates[i], withWeekday)}
           </text>
         ))}
       </svg>
       <div className="flex justify-between text-[10px]">
         <span className="text-emerald-600">■ {barLabel} max{barMax}</span>
         <span className="text-blue-600">― {lineLabel} max{lineMax}</span>
+      </div>
+    </div>
+  );
+}
+
+export function PfcBalanceChart({ actual, ideal, height = 190 }: {
+  actual: { label: string; name: string; value: number }[];
+  ideal: number[];
+  height?: number;
+}) {
+  if (!actual.length) return <EmptyNote />;
+  const w = 320;
+  const padL = 30, padR = 8, padT = 10, padB = 34;
+  const plotW = w - padL - padR;
+  const plotH = height - padT - padB;
+  const maxValue = Math.max(...actual.map((item) => item.value), ...ideal, 1);
+  const scaleMax = Math.ceil(maxValue * 1.1 / 10) * 10;
+  const step = plotW / actual.length;
+  const barW = Math.min(34, step * 0.52);
+  const x = (index: number) => padL + step * index + step / 2;
+  const y = (value: number) => padT + plotH - (value / scaleMax) * plotH;
+  const linePoints = ideal.map((value, index) => `${x(index)},${y(value)}`).join(' ');
+  const colors = ['#3B82F6', '#F97316', '#10B981'];
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${w} ${height}`} className="w-full" role="img" aria-label="PFCバランス">
+        {yTicks(0, scaleMax).map((value, index) => (
+          <g key={index}>
+            <line x1={padL} x2={w - padR} y1={y(value)} y2={y(value)} stroke="#e5e7eb" strokeWidth="0.6" />
+            <text x={padL - 4} y={y(value) + 2} fontSize="7" fill="#9ca3af" textAnchor="end">{fmtVal(value)}</text>
+          </g>
+        ))}
+        {actual.map((item, index) => {
+          const barHeight = Math.max(0, (item.value / scaleMax) * plotH);
+          return <rect key={item.label} x={x(index) - barW / 2} y={y(item.value)} width={barW} height={barHeight} fill={colors[index] ?? '#2563eb'} rx="2" />;
+        })}
+        <polyline points={linePoints} fill="none" stroke="#9CA3AF" strokeWidth="2" strokeDasharray="5 5" />
+        {ideal.map((value, index) => <circle key={index} cx={x(index)} cy={y(value)} r="2.5" fill="#fff" stroke="#9CA3AF" strokeWidth="1.5" />)}
+        {actual.map((item, index) => (
+          <g key={item.label}>
+            <text x={x(index)} y={height - 19} fontSize="10" fontWeight="700" fill="#4b5563" textAnchor="middle">{item.label}</text>
+            <text x={x(index)} y={height - 7} fontSize="7" fill="#9ca3af" textAnchor="middle">{item.name}</text>
+          </g>
+        ))}
+      </svg>
+      <div className="flex justify-center gap-4 text-[10px] text-gray-400">
+        <span><span className="mr-1 inline-block h-2 w-2 rounded-sm bg-blue-500" />平均 (g)</span>
+        <span><span className="mr-1 inline-block w-4 border-t-2 border-dashed border-gray-400 align-middle" />目標 (g)</span>
+      </div>
+    </div>
+  );
+}
+
+export function RadarChart({ labels, values, height = 280, max = 140 }: {
+  labels: string[];
+  values: number[];
+  height?: number;
+  max?: number;
+}) {
+  if (!labels.length || labels.length !== values.length) return <EmptyNote />;
+  const w = 360;
+  const cx = w / 2;
+  const cy = height / 2 - 2;
+  const radius = Math.min(100, height / 2 - 42);
+  const labelRadius = radius + 20;
+  const angle = (index: number) => -Math.PI / 2 + (Math.PI * 2 * index) / labels.length;
+  const point = (index: number, value: number, distance = radius) => {
+    const ratio = Math.max(0, Math.min(value / max, 1));
+    const a = angle(index);
+    return `${cx + Math.cos(a) * distance * ratio},${cy + Math.sin(a) * distance * ratio}`;
+  };
+  const ringPoints = (value: number) => labels.map((_, index) => point(index, value)).join(' ');
+  const actualPoints = values.map((value, index) => point(index, value)).join(' ');
+  const idealPoints = labels.map((_, index) => point(index, 100)).join(' ');
+  const ticks = [20, 40, 60, 80, 100, 120, 140].filter((value) => value <= max);
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${w} ${height}`} className="w-full" role="img" aria-label="栄養バランスRadar Chart">
+        {ticks.map((value) => <polygon key={value} points={ringPoints(value)} fill="none" stroke="#e5e7eb" strokeWidth="0.7" />)}
+        {labels.map((_, index) => {
+          const a = angle(index);
+          return <line key={index} x1={cx} y1={cy} x2={cx + Math.cos(a) * radius} y2={cy + Math.sin(a) * radius} stroke="#e5e7eb" strokeWidth="0.7" />;
+        })}
+        <polygon points={idealPoints} fill="none" stroke="#9CA3AF" strokeWidth="1.5" strokeDasharray="4 4" />
+        <polygon points={actualPoints} fill="rgba(59, 130, 246, 0.2)" stroke="#3B82F6" strokeWidth="2" />
+        {values.map((value, index) => {
+          const [x, y] = point(index, value).split(',').map(Number);
+          return <circle key={index} cx={x} cy={y} r="3" fill="#3B82F6" />;
+        })}
+        {labels.map((label, index) => {
+          const a = angle(index);
+          const x = cx + Math.cos(a) * labelRadius;
+          const y = cy + Math.sin(a) * labelRadius;
+          const anchor = Math.cos(a) > 0.35 ? 'start' : Math.cos(a) < -0.35 ? 'end' : 'middle';
+          return <text key={label} x={x} y={y + (Math.sin(a) > 0.6 ? 4 : Math.sin(a) < -0.6 ? -2 : 3)} fontSize="10" fill="#4b5563" textAnchor={anchor}>{label}</text>;
+        })}
+      </svg>
+      <div className="flex justify-center gap-4 text-[10px] text-gray-400">
+        <span><span className="mr-1 inline-block h-2 w-2 rounded-full bg-blue-500" />過去7日間の平均摂取量</span>
+        <span><span className="mr-1 inline-block w-4 border-t-2 border-dashed border-gray-400 align-middle" />理想値 (目標100%)</span>
       </div>
     </div>
   );
