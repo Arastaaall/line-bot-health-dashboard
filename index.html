@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Health Intent Test</title>
+</head>
+
+<body>
+  <h1>Android Intent Test</h1>
+
+  <p>下のボタンを順番に試してください。</p>
+
+  <p>
+    <a href="intent:#Intent;action=android.settings.SETTINGS;end">
+      Android設定を開く
+    </a>
+  </p>
+
+  <p>
+    <a href="intent:#Intent;action=android.health.connect.action.HEALTH_HOME_SETTINGS;end">
+      Health Connectを開く
+    </a>
+  </p>
+
+  <hr>
+
+  <p id="info"></p>
+
+  <script>
+    document.getElementById("info").textContent =
+      "User Agent: " + navigator.userAgent;
+  </script>
+</body>
+</html>
